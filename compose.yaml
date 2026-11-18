@@ -1,0 +1,27 @@
+name: hyper-watch
+services:
+  hyper:
+    build: .
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:?请先运行 init.sh}"
+      HYPER_PASSWORD_HASH: "${HYPER_PASSWORD_HASH:?请先运行 init.sh}"
+      HYPER_SESSION_KEY: "${HYPER_SESSION_KEY:?请先运行 init.sh}"
+      HYPER_ALERT_MINUTES: "${HYPER_ALERT_MINUTES:-5}"
+      HOST: 0.0.0.0
+      PORT: "8788"
+      DATA_DIR: /app/data
+    ports:
+      - "127.0.0.1:${HYPER_HOST_PORT:-8788}:8788"
+    volumes:
+      - data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8788/healthz').then(r=>{if(!r.ok)process.exitCode=1}).catch(()=>{process.exitCode=1})"]
+      interval: 30s
+      timeout: 4s
+      retries: 3
+      start_period: 8s
+volumes:
+  data:

@@ -1,0 +1,15 @@
+{
+  "name": "Hyper 盯盘",
+  "short_name": "Hyper 盯盘",
+  "description": "随时查看 Hyperliquid 钱包、持仓和盈亏。",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#101219",
+  "theme_color": "#101219",
+  "icons": [
+    {"src": "./icon.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "./icon-512.png", "sizes": "512x512", "type": "image/png"}
+  ]
+}

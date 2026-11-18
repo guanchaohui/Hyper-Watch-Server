@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN" data-runtime="site">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101219">
+  <meta name="description" content="查看 Hyperliquid 钱包权益走势、现货余额和合约持仓。">
+  <title>Hyper 盯盘 · 钱包总览</title>
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icon.png">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./workspace.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <header class="masthead">
+    <div class="mast-inner">
+      <a class="brand" href="./" aria-label="Hyper 盯盘首页">
+        <img class="brand-mark" src="./icon.svg" alt="" width="36" height="36">
+        <span>Hyper <b>盯盘</b></span>
+      </a>
+      <div class="header-actions">
+        <button class="btn wallet-btn" id="wallet-button" type="button">
+          <span class="icon" data-icon="wallet" aria-hidden="true"></span>
+          <span id="wallet-label">添加钱包</span>
+          <span class="icon wallet-caret" id="wallet-caret" data-icon="chevron" aria-hidden="true" hidden></span>
+        </button>
+        <form method="post" action="/logout">
+          <button class="btn" type="submit">退出</button>
+        </form>
+      </div>
+    </div>
+  </header>
+
+  <nav class="workspace-nav" aria-label="看板功能">
+    <div class="workspace-nav-inner">
+      <div class="workspace-tabs" id="workspace-tabs">
+        <button type="button" data-view="over" aria-pressed="true">概览</button>
+        <button type="button" data-view="wallets" aria-pressed="false">钱包</button>
+        <button type="button" data-view="activity" aria-pressed="false">动态</button>
+        <button type="button" data-view="compare" aria-pressed="false">对比</button>
+        <button type="button" data-view="pnl" aria-pressed="false">盈亏</button>
+        <button type="button" data-view="risk" aria-pressed="false">风险</button>
+        <button type="button" data-view="alerts" aria-pressed="false">提醒</button>
+      </div>
+      <button class="btn fast-btn" id="toggle-quick" type="button" aria-pressed="false" title="切换快看模式">快看</button>
+    </div>
+  </nav>
+
+  <main class="shell" id="dashboard">
+    <section class="heading" aria-labelledby="page-title">
+      <div>
+        <div class="network"><span class="network-dot"></span> Hyperliquid 主网</div>
+        <h1 id="page-title">钱包总览</h1>
+      </div>
+      <div class="page-actions">
+        <span class="status" id="status" data-state="demo" role="status"><i></i><span id="status-label">演示数据</span></span>
+        <button class="btn icon-btn" id="refresh" type="button" aria-label="刷新账户数据" title="刷新账户数据"><span class="icon" data-icon="refresh" aria-hidden="true"></span></button>
+      </div>
+    </section>
+
+    <div class="notice" id="notice" hidden role="status">
+      <span class="icon" data-icon="info" aria-hidden="true"></span>
+      <span id="notice-text"></span>
+      <button class="quiet-link" id="retry" type="button">重试</button>
+    </div>
+
+    <section class="metrics" aria-label="账户概览">
+      <article class="metric total-metric">
+        <div class="metric-top">
+          <h2><span class="icon metric-icon" data-icon="layers" aria-hidden="true"></span>账户权益</h2>
+          <button class="eye" id="privacy" type="button" aria-label="隐藏金额" aria-pressed="false" title="隐藏金额"><span class="icon" id="privacy-icon" data-icon="eye" aria-hidden="true"></span></button>
+        </div>
+        <div class="metric-number" id="equity">—</div>
+        <div class="metric-foot" id="equity-note">Hyperliquid 账户估值</div>
+      </article>
+      <article class="metric">
+        <div class="metric-top"><h2><span class="icon metric-icon" data-icon="trend" aria-hidden="true"></span>近 24 小时盈亏</h2></div>
+        <div class="metric-number" id="daily">—</div>
+        <div class="metric-foot foot-flex"><span id="daily-percent" class="change" hidden></span><span id="daily-note">按官方盈亏曲线计算</span></div>
+      </article>
+      <article class="metric">
+        <div class="metric-top"><h2><span class="icon metric-icon" data-icon="bolt" aria-hidden="true"></span>合约未实现盈亏</h2></div>
+        <div class="metric-number" id="floating">—</div>
+        <div class="metric-foot" id="floating-note">当前合约持仓的浮动盈亏</div>
+      </article>
+    </section>
+
+    <div class="overview">
+      <section class="panel trend-panel" aria-labelledby="trend-title">
+        <div class="panel-head trend-head">
+          <h2 id="trend-title">资产走势</h2>
+          <div class="segmented periods" id="periods" role="group" aria-label="图表时间范围">
+            <button type="button" data-period="day" aria-pressed="true">24 小时</button>
+            <button type="button" data-period="week" aria-pressed="false">7 天</button>
+            <button type="button" data-period="month" aria-pressed="false">30 天</button>
+            <button type="button" data-period="allTime" aria-pressed="false">全部</button>
+          </div>
+        </div>
+        <div class="chart-toolbar">
+          <div class="chart-series" id="series" role="group" aria-label="图表指标">
+            <button type="button" data-series="equity" aria-pressed="true"><i></i>账户权益</button>
+            <button type="button" data-series="pnl" aria-pressed="false"><i></i>区间盈亏</button>
+          </div>
+          <span class="chart-unit">USD</span>
+        </div>
+        <div class="chart-container" id="chart-container">
+          <canvas id="chart" aria-label="账户权益历史图"></canvas>
+          <div id="chart-empty" class="chart-empty" hidden></div>
+          <div id="chart-tooltip" class="chart-tooltip" hidden aria-hidden="true">
+            <span id="tooltip-time"></span><strong id="tooltip-value"></strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel exposure-panel" aria-labelledby="exposure-title">
+        <div class="panel-head exposure-head">
+          <h2 id="exposure-title">合约仓位分布</h2>
+          <span class="panel-unit" id="exposure-unit">按名义价值</span>
+        </div>
+        <div class="ring-area">
+          <div class="ring" id="ring" aria-hidden="true">
+            <div class="ring-center">
+              <span>总仓位</span>
+              <strong id="exposure-total">—</strong>
+            </div>
+          </div>
+          <div class="exposure-legend">
+            <div class="legend-row"><span><i class="dot-long"></i>多仓</span><strong id="exposure-long">—</strong><small id="long-percent">—</small></div>
+            <div class="legend-row"><span><i class="dot-short"></i>空仓</span><strong id="exposure-short">—</strong><small id="short-percent">—</small></div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <section class="panel holdings" aria-label="持仓与余额">
+      <div class="holdings-head">
+        <div class="holdings-tabs" id="holdings-tabs" role="group" aria-label="资产类型">
+          <button type="button" data-tab="positions" aria-pressed="true">合约持仓 <span id="position-count">—</span></button>
+          <button type="button" data-tab="spot" aria-pressed="false">现货余额 <span id="spot-count">—</span></button>
+        </div>
+        <span class="holding-info" id="holding-info"><i></i><span id="holding-info-text">演示持仓</span></span>
+      </div>
+      <div class="holdings-body" id="holdings-body"></div>
+    </section>
+
+    <footer class="footer">
+      <span><span class="icon" data-icon="lock" aria-hidden="true"></span> 只读看板 <i>·</i> 数据来自 Hyperliquid</span>
+      <div class="footer-end"><span id="footer-update">当前为演示数据</span><button type="button" id="diagnostics" class="quiet-link">连接详情</button></div>
+    </footer>
+  </main>
+
+  <main id="workspace-view" class="shell workspace-view" hidden></main>
+  <dialog id="details-dialog" aria-labelledby="details-title">
+    <div class="dialog-head"><h2 id="details-title">连接详情</h2><button class="btn" type="button" id="close-details" aria-label="关闭">关闭</button></div>
+    <div id="details-content"></div>
+  </dialog>
+
+  <dialog id="wallet-dialog" aria-labelledby="wallet-title">
+    <div>
+      <div class="dialog-head">
+        <span class="dialog-mark icon" data-icon="wallet" aria-hidden="true"></span>
+        <button type="button" class="btn icon-btn close-dialog" id="close-wallet" aria-label="关闭"><span class="icon" data-icon="close" aria-hidden="true"></span></button>
+      </div>
+      <h2 id="wallet-title">观察 Hyperliquid 钱包</h2>
+      <p>复制 Hyperliquid 账户菜单里显示的钱包地址。看子账户时，填子账户自己的地址。</p>
+      <label for="wallet-input">公开钱包地址</label>
+      <input id="wallet-input" type="text" autofocus placeholder="0x…" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="60" required aria-describedby="address-message">
+      <div id="address-message" class="address-message" aria-live="polite">只需地址，无需连接钱包、签名或提供私钥。</div>
+      <div class="dialog-actions">
+        <button type="button" class="btn secondary-btn" id="demo-button">查看演示</button>
+        <button type="button" class="btn primary-btn" id="observe-wallet">开始观察 <span class="icon" data-icon="arrow" aria-hidden="true"></span></button>
+      </div>
+      <div id="recents" class="recents" hidden>
+        <div class="recents-head"><span>最近观察</span><button type="button" class="quiet-link" id="clear-recents">清除</button></div>
+        <div id="recents-list"></div>
+      </div>
+    </div>
+  </dialog>
+</body>
+</html>

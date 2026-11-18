@@ -1,0 +1,6 @@
+.env
+.hyper-watch-env.*
+.git
+dist
+data
+.deploy.lock

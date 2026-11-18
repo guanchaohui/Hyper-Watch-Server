@@ -1,0 +1,33 @@
+@import url("/styles.css");
+
+.login-frame {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px;
+}
+.login-panel {
+  width: min(410px, 100%);
+  background: #181c25;
+  border: 1px solid #2b3140;
+  border-radius: 18px;
+  padding: 26px;
+  box-shadow: 0 26px 90px #05060b80;
+}
+.login-panel h1 { font-size: 25px; margin: 20px 0 4px; }
+.login-panel p { color: var(--muted); margin: 0 0 17px; }
+.login-panel form { display: grid; gap: 9px; }
+.login-panel label { font-size: 13px; color: var(--muted); }
+.login-panel input {
+  width: 100%;
+  background: #12151d;
+  border: 1px solid #343e50;
+  color: #f4f8ff;
+  padding: 11px 12px;
+  border-radius: 9px;
+  font: inherit;
+  font-size: 16px;
+}
+.login-panel .btn { margin-top: 9px; min-height: 44px; }
+.login-panel input:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
+.login-panel .notice { margin-bottom: 16px; }
