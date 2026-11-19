@@ -1,9 +1,11 @@
 import assets from "./assets.js";
 import { addressOf, cleanProfile, day } from "./analytics.js";
-import { alertCheckMinutes, checkAlerts } from "./alerts.js";
+import { alertCheckMinutes, checkAlerts, equityAlertLevels } from "./alerts.js";
+import { readAlertHealth, readPushHealth, savePushHealth } from "./alert-health.js";
 import { cleanSubscription, sendPush } from "./push.js";
+import { formatNotificationPreview } from "./notification-format.js";
+import { hyperliquidInfo } from "./hyperliquid.js";
 
-const sourceApi = "https://api.hyperliquid.xyz/info";
 const marketTypes = new Set(["portfolio", "clearinghouseState", "spotClearinghouseState", "userFillsByTime", "userFunding", "userNonFundingLedgerUpdates"]);
 const timedTypes = new Set(["userFillsByTime", "userFunding", "userNonFundingLedgerUpdates"]);
 const noCache = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" };
@@ -57,16 +59,14 @@ async function proxyMarket(request) {
     if (raw.type === "userFillsByTime") payload.aggregateByTime = true;
   }
   try {
-    const result = await fetch(sourceApi, {
-      method: "POST",
-      body: JSON.stringify(payload),
-      headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(9500),
-      redirect: "error",
-    });
-    if (!result.ok) return json({ error: "Hyperliquid HTTP " + result.status }, result.status === 429 ? 429 : 502);
-    return new Response(result.body, { headers: { "Content-Type": "application/json", ...noCache } });
+    return json(await hyperliquidInfo(payload));
   } catch (error) {
+    if (error.status === 429) {
+      return Response.json({ error: error.message }, { status: 429, headers: {
+        ...noCache, "Retry-After": String(Math.max(1, Math.ceil(error.retryIn / 1000))),
+      } });
+    }
+    if (error.status) return json({ error: error.message }, error.status);
     return json({ error: "看板无法连接 Hyperliquid" }, error.name === "TimeoutError" ? 504 : 502);
   }
 }
@@ -102,7 +102,10 @@ async function pushRoute(request, env, user, route) {
   if (route === "/api/push-device" && request.method === "POST") {
     const subscription = cleanSubscription(await body(request, 6000));
     if (!subscription) return json({ error: "无效的设备订阅" }, 400);
-    await env.DB.prepare("INSERT OR REPLACE INTO push_devices VALUES (?, ?, ?)").bind(user, subscription.endpoint, JSON.stringify(subscription)).run();
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM push_devices WHERE endpoint = ? AND user_id <> ?").bind(subscription.endpoint, user),
+      env.DB.prepare("INSERT OR REPLACE INTO push_devices VALUES (?, ?, ?)").bind(user, subscription.endpoint, JSON.stringify(subscription)),
+    ]);
     return json({ ok: true });
   }
   if (route === "/api/push-device" && request.method === "DELETE") {
@@ -110,30 +113,49 @@ async function pushRoute(request, env, user, route) {
     await env.DB.prepare("DELETE FROM push_devices WHERE user_id = ? AND endpoint = ?").bind(user, String(data?.endpoint ?? "")).run();
     return json({ ok: true });
   }
+  if (route === "/api/push-status" && request.method === "POST") {
+    const data = await body(request, 4000);
+    const endpoint = String(data?.endpoint ?? "");
+    const row = await env.DB.prepare("SELECT 1 FROM push_devices WHERE user_id = ? AND endpoint = ?")
+      .bind(user, endpoint).first();
+    return json({ enabled: Boolean(row), push: endpoint ? await readPushHealth(env.DB, user, endpoint) : null });
+  }
   if (route === "/api/push-test" && request.method === "POST") {
     if (!env.VAPID_PRIVATE) return json({ error: "推送未配置" }, 503);
     const data = await body(request, 4000);
+    const endpoint = String(data?.endpoint ?? "");
     const row = await env.DB.prepare("SELECT subscription FROM push_devices WHERE user_id = ? AND endpoint = ?")
-      .bind(user, String(data?.endpoint ?? "")).first();
+      .bind(user, endpoint).first();
     if (!row) return json({ error: "请先开启本机通知" }, 404);
     try {
-      const status = await sendPush(env, JSON.parse(row.subscription), { title: "Hyper 盯盘", body: "本机推送测试", tag: "hyper-test" });
+      const sample = formatNotificationPreview(data.preview ?? {
+        name: "测试钱包", notificationFields: data.notificationFields,
+      });
+      const status = await sendPush(env, JSON.parse(row.subscription), {
+        ...sample, title: "测试 · " + sample.title, tag: "hyper-test", account: user,
+      });
+      await savePushHealth(env.DB, user, endpoint, status, true);
+      if (status === "retry") return json({ error: "推送服务暂时限流，请稍后再试" }, 429);
       return status === "sent" ? json({ ok: true }) : json({ error: "设备订阅已过期" }, 410);
     } catch {
+      await savePushHealth(env.DB, user, endpoint, "failed", true);
       return json({ error: "推送服务暂时不可用" }, 502);
     }
   }
   return json({ error: "无效的推送操作" }, 405);
 }
 
-function serveAsset(route, method) {
+function serveAsset(route, method, user) {
   if (method !== "GET" && method !== "HEAD") return json({ error: "请求方法不可用" }, 405);
   const asset = assets[route === "/" ? "/index.html" : route];
   if (!asset) return new Response("Not found", { status: 404, headers: noCache });
   const [mime, contents] = asset;
-  const responseBody = mime.startsWith("image/png") ? Uint8Array.from(atob(contents), c => c.charCodeAt(0)) : contents;
+  const dashboard = route === "/" || route === "/index.html";
+  const account = user && /^[a-z0-9][a-z0-9_-]{2,23}$/.test(user) ? user : "";
+  const responseBody = dashboard ? contents.replace('data-account=""', 'data-account="' + account + '"')
+    : mime.startsWith("image/png") ? Uint8Array.from(atob(contents), c => c.charCodeAt(0)) : contents;
   return new Response(method === "HEAD" ? null : responseBody, {
-    headers: { "Content-Type": mime, "Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff" },
+    headers: { "Content-Type": mime, "Cache-Control": dashboard ? "no-store" : "no-cache", "X-Content-Type-Options": "nosniff" },
   });
 }
 
@@ -141,19 +163,24 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const route = url.pathname;
-    if (!route.startsWith("/api/")) return serveAsset(route, request.method);
     const user = request.headers.get("oai-authenticated-user-id");
+    if (!route.startsWith("/api/")) return serveAsset(route, request.method, user);
     const origin = request.headers.get("origin");
     const crossSite = request.headers.get("sec-fetch-site") === "cross-site";
     if (request.method !== "GET" && (crossSite || (origin && origin !== url.origin))) return json({ error: "请求来源无效" }, 403);
     try {
       if (!user) return json({ error: "请先登录看板" }, 401);
-      if (route === "/api/run-alerts" && request.method === "POST") return json(await checkAlerts(env));
       if (route === "/api/market" && request.method === "POST") return proxyMarket(request);
+      if (request.headers.get("x-hyper-account") !== user) return json({ error: "登录账户已变化，请刷新页面" }, 401);
+      if (route === "/api/run-alerts" && request.method === "POST") return json(await checkAlerts(env, user));
+      if (route === "/api/alert-health" && request.method === "GET") {
+        return json({ cloud: await readAlertHealth(env.DB, user) });
+      }
+      if (route === "/api/equity-alert-levels" && request.method === "GET") return json(await equityAlertLevels(env.DB, user));
       if (route === "/api/profile") return await syncProfile(request, env.DB, user);
       if (route.startsWith("/api/push-")) return await pushRoute(request, env, user, route);
       if (route === "/api/inbox" && request.method === "GET") {
-        const { results } = await env.DB.prepare("SELECT event_id AS id, body, created_at AS time FROM alerts WHERE user_id = ? ORDER BY created_at DESC LIMIT 60").bind(user).all();
+        const { results } = await env.DB.prepare("SELECT event_id AS id, title, body, created_at AS time FROM alerts WHERE user_id = ? ORDER BY created_at DESC LIMIT 60").bind(user).all();
         return json({ items: results });
       }
       return json({ error: "未找到接口" }, 404);

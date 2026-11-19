@@ -3,6 +3,10 @@ const dateOnly = new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "nume
 const longDate = new Intl.DateTimeFormat("zh-CN", {
   year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false,
 });
+const chinaTimeOnly = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const chinaLongDate = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+});
 const compactMoney = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 2 });
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
@@ -90,7 +94,7 @@ export function createChart(canvas, empty, tooltip, timeLabel, valueLabel) {
       const divisions = width < 475 ? 3 : 5;
       for (let i = 0; i <= divisions; i++) {
         const time = first + duration * i / divisions;
-        const fmt = period === "day" ? timeOnly : dateOnly;
+        const fmt = period === "today" ? chinaTimeOnly : period === "day" ? timeOnly : dateOnly;
         ctx.textAlign = i === 0 ? "left" : i === divisions ? "right" : "center";
         ctx.fillText(fmt.format(time), x(time), height - 13);
       }
@@ -140,7 +144,7 @@ export function createChart(canvas, empty, tooltip, timeLabel, valueLabel) {
 
     tooltip.hidden = hovered < 0;
     if (hovered >= 0) {
-      timeLabel.textContent = longDate.format(point[0]);
+      timeLabel.textContent = (period === "today" ? chinaLongDate : longDate).format(point[0]);
       valueLabel.textContent = masked ? "••••••" : money.format(point[1]);
       const left = Math.max(2, Math.min(width - tooltip.offsetWidth - 2, px + (px > width / 2 ? -tooltip.offsetWidth - 10 : 10)));
       tooltip.style.left = left + "px";

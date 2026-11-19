@@ -7,7 +7,9 @@ import { DatabaseSync } from "node:sqlite";
 import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import worker from "./dist/server/index.js";
+import version from "./dist/server/version.js";
 import { checkAlerts } from "./dist/server/alerts.js";
+import { startFillStream } from "./dist/server/fill-stream.js";
 
 const publicUrl = new URL(process.env.PUBLIC_ORIGIN || "file:///");
 if (publicUrl.protocol !== "https:" || publicUrl.pathname !== "/" || publicUrl.search || publicUrl.hash ||
@@ -29,7 +31,17 @@ await mkdir(directory, { recursive: true, mode: 0o700 });
 const sqlite = new DatabaseSync(resolve(directory, "hyper-watch.sqlite"), { timeout: 5000 });
 sqlite.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
 sqlite.exec(await readFile(new URL("./drizzle/0000_watchlist.sql", import.meta.url), "utf8"));
-sqlite.exec("CREATE TABLE IF NOT EXISTS server_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+if (!sqlite.prepare("PRAGMA table_info(alerts)").all().some(column => column.name === "title")) {
+  sqlite.exec("ALTER TABLE alerts ADD COLUMN title TEXT");
+}
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS server_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS accounts (
+    username TEXT PRIMARY KEY NOT NULL,
+    salt TEXT NOT NULL,
+    password_hash TEXT NOT NULL
+  );
+`);
 
 const DB = {
   prepare(sql) {
@@ -77,13 +89,13 @@ const cookieName = "__Host-hyper-session";
 const lifetime = 30 * 86400;
 const headerSecurity = {
   "X-Content-Type-Options": "nosniff",
-  "Referrer-Policy": "no-referrer",
+  "Referrer-Policy": "same-origin",
   "X-Frame-Options": "DENY",
   "Content-Security-Policy": "default-src 'self'; connect-src 'self' https://api.hyperliquid.xyz wss://api.hyperliquid.xyz; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; worker-src 'self'",
 };
 
 const headersNoCache = { ...headerSecurity, "Cache-Control": "no-store" };
-const allowPublicAssets = new Set(["/styles.css", "/login.css", "/icon.svg", "/icon.png", "/manifest.webmanifest", "/icon-512.png"]);
+const allowPublicAssets = new Set(["/styles.css", "/login.css", "/icon.svg", "/icon.png", "/manifest.webmanifest", "/icon-512.png", "/version-check.js"]);
 
 function signature(data) {
   return createHmac("sha256", sessionKey).update(configuredHash).update(".").update(data).digest("base64url");
@@ -93,36 +105,64 @@ function cookie(value, age) {
   return `${cookieName}=${value}; Max-Age=${age}; Path=/; HttpOnly; Secure; SameSite=Lax`;
 }
 
-function newSession() {
+function newSession(username) {
   const expires = Math.floor(Date.now() / 1000) + lifetime;
-  const value = `${expires}.${randomBytes(18).toString("base64url")}`;
+  const value = `${username}.${expires}.${randomBytes(18).toString("base64url")}`;
   return cookie(value + "." + signature(value), lifetime);
 }
 
-function hasSession(header = "") {
+const usernamePattern = /^[a-z0-9][a-z0-9_-]{2,23}$/;
+const owner = "owner";
+
+function sessionAccount(header = "") {
   const token = header.split(";").map(part => part.trim()).find(part => part.startsWith(cookieName + "="))?.slice(cookieName.length + 1);
-  if (!token || !/^\d{10,13}\.[A-Za-z0-9_-]{24}\.[A-Za-z0-9_-]{43}$/.test(token)) return false;
-  const [expires, nonce, proof] = token.split(".");
-  if (Number(expires) <= Math.floor(Date.now() / 1000)) return false;
-  return timingSafeEqual(Buffer.from(proof), Buffer.from(signature(expires + "." + nonce)));
+  const match = token?.match(/^([a-z0-9_-]{3,24})\.(\d{10,13})\.([A-Za-z0-9_-]{24})\.([A-Za-z0-9_-]{43})$/);
+  if (!match) return null;
+  const [, username, expires, nonce, proof] = match;
+  if (!usernamePattern.test(username) || Number(expires) <= Math.floor(Date.now() / 1000)) return null;
+  const expected = signature([username, expires, nonce].join("."));
+  if (!timingSafeEqual(Buffer.from(proof), Buffer.from(expected))) return null;
+  return username;
 }
 
-const failures = new Map();
+const loginAttempts = new Map();
+const registrationAttempts = new Map();
 const derive = promisify(scrypt);
 
-function loginPage(error = "") {
-  const notice = error ? '<div class="notice" role="alert">' + error + "</div>" : "";
+function accountPage(title, content) {
   return `<!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-version="${version}">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#101219"><title>登录 · Hyper 盯盘</title><link rel="icon" href="/icon.svg"><link rel="apple-touch-icon" href="/icon.png"><link rel="manifest" href="/manifest.webmanifest"><link rel="stylesheet" href="/login.css"></head>
-<body><main class="login-frame"><section class="login-panel" aria-labelledby="title">
+<meta name="theme-color" content="#101219"><title>${title} · Hyper 盯盘</title><link rel="icon" href="/icon.svg"><link rel="apple-touch-icon" href="/icon.png"><link rel="manifest" href="/manifest.webmanifest"><link rel="stylesheet" href="/login.css"><script src="/version-check.js" defer></script></head>
+<body><div class="version-notice" id="version-notice" hidden><span role="status">有新版本</span><button class="btn" id="version-reload" type="button">刷新</button></div><main class="login-frame"><section class="login-panel" aria-labelledby="title">
 <a class="brand" href="/"><img class="brand-mark" src="/icon.svg" alt="" width="36" height="36"><span>Hyper <b>盯盘</b></span></a>
-<h1 id="title">登录私人看板</h1><p>使用部署时设置的密码登录。</p>${notice}
-<form action="/login" method="post"><label for="password">看板密码</label>
-<input id="password" name="password" type="password" autocomplete="current-password" required maxlength="256">
-<button class="btn primary-btn" type="submit">登录</button></form></section></main></body></html>`;
+<h1 id="title">${title}</h1>${content}</section></main></body></html>`;
 }
+
+function credentialsPage(register, error = "") {
+  const notice = error ? '<div class="notice" role="alert">' + error + "</div>" : "";
+  const title = register ? "创建看板账户" : "登录私人看板";
+  const hint = register ? "" : "登录后可在手机和电脑上同步你的钱包。";
+  const alternate = register ? '<a href="/login">返回登录</a>' : '<a href="/register">注册账户</a>';
+  return accountPage(title, `${hint ? "<p>" + hint + "</p>" : ""}${notice}
+<form action="/${register ? "register" : "login"}" method="post">
+<label for="username">用户名</label>
+<input id="username" name="username" required minlength="3" maxlength="24" autocomplete="username" autocapitalize="none" spellcheck="false"${register ? ' pattern="[A-Za-z0-9][A-Za-z0-9_\\-]{2,23}" aria-describedby="username-help"' : ""}>
+${register ? '<small id="username-help">3–24 个字符，可用字母、数字、下划线或连字符。</small>' : ""}
+<label for="password">密码</label>
+<input id="password" name="password" type="password" autocomplete="${register ? "new-password" : "current-password"}" required maxlength="256"${register ? ' minlength="7" aria-describedby="password-help"' : ""}>
+${register ? '<small id="password-help">至少 7 个字符。</small>' : ""}
+<button class="btn primary-btn" type="submit">${register ? "注册并登录" : "登录"}</button>
+</form><div class="account-links">${alternate}</div>`);
+}
+
+function accountSettings(username) {
+  return accountPage("账户", `<p>已登录为 <strong>${username}</strong></p>
+<form method="post" action="/logout"><button class="btn" type="submit">退出登录</button></form>
+<div class="account-links"><a href="/">返回看板</a></div>`);
+}
+
+const html = (outgoing, text, status = 200) => send(outgoing, status, text, { "Content-Type": "text/html; charset=utf-8" });
 
 function send(outgoing, status, text, headers = {}) {
   outgoing.writeHead(status, { "Content-Type": "text/plain; charset=utf-8", ...headersNoCache, ...headers });
@@ -137,19 +177,28 @@ function fromOwnPage(incoming) {
   return (!incoming.headers.origin || incoming.headers.origin === publicOrigin) && !["cross-site", "same-site"].includes(incoming.headers["sec-fetch-site"]);
 }
 
-async function login(incoming, outgoing) {
+async function registerAccount(username, password) {
+  const accountSalt = randomBytes(24).toString("base64url");
+  const hash = (await derive(password, accountSalt, 48)).toString("base64url");
+  return sqlite.prepare("INSERT INTO accounts VALUES (?, ?, ?) ON CONFLICT(username) DO NOTHING")
+    .run(username, accountSalt, hash).changes === 1;
+}
+
+async function authenticate(incoming, outgoing, register) {
   const contentType = incoming.headers["content-type"] || "";
   if (!fromOwnPage(incoming)) return send(outgoing, 403, "请求来源无效");
   if (!contentType.startsWith("application/x-www-form-urlencoded")) return send(outgoing, 415, "请求格式无效");
   const forwarded = String(incoming.headers["x-real-ip"] || "");
   const key = isIP(forwarded) ? forwarded : incoming.socket.remoteAddress || "unknown";
   const now = Date.now();
-  for (const [ip, state] of failures) if (state.until <= now) failures.delete(ip);
-  const current = failures.get(key);
-  if (current?.count >= 8) return send(outgoing, 429, loginPage("尝试次数过多，请稍后再试。"), { "Content-Type": "text/html; charset=utf-8" });
-  if (failures.size >= 2000 && !current) return send(outgoing, 429, "请稍后再试");
+  const attempts = register ? registrationAttempts : loginAttempts;
+  for (const [ip, state] of attempts) if (state.until <= now) attempts.delete(ip);
+  const current = attempts.get(key);
+  if (current?.count >= 8 || (attempts.size >= 2000 && !current)) {
+    return html(outgoing, credentialsPage(register, "尝试次数过多，请稍后再试。"), 429);
+  }
+  attempts.set(key, { count: (current?.count || 0) + 1, until: current?.until ?? now + 15 * 60000 });
 
-  failures.set(key, { count: (current?.count || 0) + 1, until: current?.until ?? now + 15 * 60000 });
   let size = 0;
   const chunks = [];
   for await (const buffer of incoming) {
@@ -157,11 +206,25 @@ async function login(incoming, outgoing) {
     if (size > 4096) return send(outgoing, 413, "请求内容太长");
     chunks.push(buffer);
   }
-  const password = new URLSearchParams(Buffer.concat(chunks).toString("utf8")).get("password") ?? "";
-  const valid = password.length <= 256 && timingSafeEqual(await derive(password, salt, 48), expectedHash);
-  if (!valid) return send(outgoing, 401, loginPage("密码不正确。"), { "Content-Type": "text/html; charset=utf-8" });
-  failures.delete(key);
-  redirect(outgoing, "/", newSession());
+  const form = new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
+  const username = (form.get("username") ?? "").trim().toLowerCase();
+  const password = form.get("password") ?? "";
+  if (register) {
+    if (!usernamePattern.test(username) || username === owner || password.length < 7 || password.length > 256 || password.includes("\0")) {
+      return html(outgoing, credentialsPage(true, "请使用可用的用户名和 7–256 个字符的密码。"), 400);
+    }
+    if (!await registerAccount(username, password)) {
+      return html(outgoing, credentialsPage(true, "用户名已被使用，请换一个。"), 409);
+    }
+  } else {
+    const account = username === owner ? { salt, password_hash: configuredHash }
+      : sqlite.prepare("SELECT salt, password_hash FROM accounts WHERE username = ?").get(username);
+    const expected = account ? Buffer.from(account.password_hash, "base64url") : expectedHash;
+    const valid = password.length <= 256 && timingSafeEqual(await derive(password, account?.salt ?? salt, 48), expected);
+    if (!account || !valid) return html(outgoing, credentialsPage(false, "用户名或密码不正确。"), 401);
+    attempts.delete(key);
+  }
+  redirect(outgoing, "/", newSession(username));
 }
 
 const server = createServer({ requestTimeout: 15000, headersTimeout: 7000 }, async (incoming, outgoing) => {
@@ -172,14 +235,25 @@ const server = createServer({ requestTimeout: 15000, headersTimeout: 7000 }, asy
     const path = url.pathname;
     if (path === "/healthz" && incoming.method === "GET") return send(outgoing, 200, "ok");
     if (String(incoming.headers.host ?? "").toLowerCase() !== publicUrl.host) return send(outgoing, 421, "请使用配置的域名访问");
-    const signedIn = hasSession(incoming.headers.cookie);
-    if (path === "/login" && incoming.method === "GET") {
-      if (signedIn) return redirect(outgoing, "/");
-      return send(outgoing, 200, loginPage(), { "Content-Type": "text/html; charset=utf-8" });
+    if (path === "/version.json" && incoming.method === "GET") {
+      return send(outgoing, 200, JSON.stringify({ version }), { "Content-Type": "application/json" });
     }
-    if (path === "/login" && incoming.method === "POST") return await login(incoming, outgoing);
+    const signedIn = sessionAccount(incoming.headers.cookie);
+    if (path === "/login" || path === "/register") {
+      if (signedIn) return redirect(outgoing, "/");
+      const register = path === "/register";
+      if (incoming.method === "GET") return html(outgoing, credentialsPage(register));
+      if (incoming.method === "POST") return await authenticate(incoming, outgoing, register);
+      return send(outgoing, 405, "请求方法不可用");
+    }
     if (path === "/logout" && incoming.method === "POST" && signedIn) {
       return fromOwnPage(incoming) ? redirect(outgoing, "/login", cookie("", 0)) : send(outgoing, 403, "请求来源无效");
+    }
+    if (path === "/account" && incoming.method === "GET" && signedIn) {
+      return html(outgoing, accountSettings(signedIn));
+    }
+    if (path === "/api/account" && incoming.method === "GET" && signedIn) {
+      return send(outgoing, 200, JSON.stringify({ username: signedIn }), { "Content-Type": "application/json" });
     }
     if (!signedIn && !allowPublicAssets.has(path)) {
       if (path.startsWith("/api/")) return send(outgoing, 401, JSON.stringify({ error: "请登录看板" }), { "Content-Type": "application/json" });
@@ -189,7 +263,7 @@ const server = createServer({ requestTimeout: 15000, headersTimeout: 7000 }, asy
 
     const headers = new Headers(incoming.headers);
     headers.delete("oai-authenticated-user-id");
-    if (signedIn) headers.set("oai-authenticated-user-id", "owner");
+    if (signedIn) headers.set("oai-authenticated-user-id", signedIn);
     const streamBody = incoming.method !== "GET" && incoming.method !== "HEAD";
     const request = new Request(url, {
       method: incoming.method,
@@ -223,6 +297,8 @@ async function scheduledScan() {
 const port = Number(process.env.PORT || 8788);
 server.listen(port, process.env.HOST || "127.0.0.1", () => {
   console.log("Hyper 盯盘已启动，监听端口", port);
+  const stopFillStream = startFillStream(workerEnv);
+  server.once("close", stopFillStream);
   setTimeout(scheduledScan, 3000).unref();
   setInterval(scheduledScan, interval * 60000).unref();
 });

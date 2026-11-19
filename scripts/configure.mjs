@@ -9,8 +9,8 @@ if (hostname.length > 253 || labels.length < 2 || !/^(?:[a-z]{2,63}|xn--[a-z0-9-
   process.exit(1);
 }
 const password = readFileSync(0, "utf8");
-if (password.length < 16 || password.length > 256 || password.includes("\0")) {
-  console.error("登录密码须为 16 至 256 个字符。");
+if (password.length < 7 || password.length > 256 || password.includes("\0")) {
+  console.error("登录密码须为 7 至 256 个字符。");
   process.exit(1);
 }
 const salt = randomBytes(24).toString("base64url");

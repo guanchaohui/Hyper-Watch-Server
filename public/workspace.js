@@ -1,8 +1,10 @@
-import { addressOf, actionLabels, cleanProfile, day, gapToLiquidation, metricsFor, portfolioBrief, positionChanges, walletLimit, walletName } from "./analytics.js";
+import { addressOf, actionLabels, cashMovements, cleanEquityChangeAlert, cleanProfile, day, metricsFor, notificationFieldLabels, portfolioBrief, positionChanges, walletLimit, walletName } from "./analytics.js";
+import { formatNotificationPreview } from "./notification-format.js";
 import { info, parsePortfolio, parsePositions } from "./market.js";
 
 const $ = id => document.getElementById(id);
 const siteRuntime = document.documentElement.dataset.runtime === "site";
+const account = document.documentElement.dataset.account;
 const formatting = new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 const tip = text => '<div class="list-state">' + esc(text) + "</div>";
@@ -16,9 +18,11 @@ const check = (name, key, value, label) => '<label class="check"><input type="ch
 async function request(path, method = "GET", data) {
   const response = await fetch(path, {
     method, cache: "no-store", credentials: "same-origin",
-    ...(data !== undefined ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) } : {}),
+    headers: { "X-Hyper-Account": account, ...(data !== undefined ? { "Content-Type": "application/json" } : {}) },
+    ...(data !== undefined ? { body: JSON.stringify(data) } : {}),
   });
   const payload = await response.json().catch(() => ({}));
+  if (response.status === 401) location.replace("/");
   if (!response.ok) throw Object.assign(new Error(payload.error || "请求失败（" + response.status + "）"), { status: response.status, payload });
   return payload;
 }
@@ -31,6 +35,8 @@ function table(columns, rows) {
 
 export function setupWorkspace(ui) {
   const viewRoot = $("workspace-view");
+  const comparison = $("overview-comparison");
+  const comparisonContent = $("overview-comparison-content");
   let profile = cleanProfile(ui.load("workspace", {}));
   let active = "over";
   let revision = 0;
@@ -60,23 +66,31 @@ export function setupWorkspace(ui) {
   }
 
   const briefOnly = async address => {
+    const startedAt = Date.now();
     const cached = briefCache.get(address);
-    if (cached && Date.now() - cached.at < 40000) return cached;
+    if (cached && startedAt - cached.startedAt < 10000) return cached;
     const [history, positions] = await Promise.allSettled([
       info("portfolio", address).then(parsePortfolio),
       info("clearinghouseState", address).then(raw => parsePositions([["", raw]])),
     ]);
     if (history.status === "rejected" && positions.status === "rejected") throw history.reason;
-    const next = { at: Date.now(), history: history.value ?? null, positions: positions.value ?? null };
+    const next = { at: Date.now(), startedAt, history: history.value ?? null, positions: positions.value ?? null };
     briefCache.set(address, next);
     return next;
   };
+
+  function selectDefaultWallet() {
+    const current = ui.session();
+    const wallet = own() ?? profile.wallets[0];
+    if (!current.user && !current.demo && wallet) ui.observe(wallet.address);
+  }
 
   const persistLocal = () => {
     ui.store("workspace", profile);
     ui.store("workspace-pending", dirty);
     document.body.classList.toggle("quick-mode", profile.quick);
     $("toggle-quick").setAttribute("aria-pressed", String(profile.quick));
+    selectDefaultWallet();
   };
 
   function syncStatus() {
@@ -97,6 +111,7 @@ export function setupWorkspace(ui) {
         revision = result.revision;
         dirty = snapshot !== JSON.stringify(profile);
         persistLocal();
+        if (active === "alerts") refreshEquityLevels();
       } else {
         const result = await request("/api/profile");
         if (result.revision > revision && dirty && revision !== result.revision) {
@@ -118,7 +133,7 @@ export function setupWorkspace(ui) {
         conflict = error.payload;
         syncMessage = "其他设备修改了设置，请选择保留的版本";
       } else {
-        syncMessage = "同步暂时不可用，设置保存在本机";
+        syncMessage = error.status === 400 ? error.message : "同步暂时不可用，设置保存在本机";
         return;
       }
     } finally {
@@ -129,6 +144,13 @@ export function setupWorkspace(ui) {
   }
 
   function update(next) {
+    const currentWallet = profile.wallets.find(wallet => wallet.role === "mine")?.address;
+    const nextWallet = next.wallets.find(wallet => wallet.role === "mine")?.address;
+    const rules = next.rules;
+    if (rules.equityMode === "percent" && Number(rules.equity) > 0 &&
+        (profile.rules.equityMode !== "percent" || !profile.rules.equity || currentWallet !== nextWallet || !rules.equityTrackingId)) {
+      next = { ...next, rules: { ...rules, equityTrackingId: crypto.randomUUID() } };
+    }
     profile = cleanProfile(next);
     if (siteRuntime) dirty = true;
     persistLocal();
@@ -170,7 +192,7 @@ export function setupWorkspace(ui) {
         const positions = data.positions;
         const longs = positions?.filter(row => row.size > 0).length ?? 0;
         const shorts = positions?.filter(row => row.size < 0).length ?? 0;
-        const details = positions ? (positions.length ? "主市场 " + longs + " 多 / " + shorts + " 空" : "主市场无持仓") : "持仓暂不可用";
+        const details = positions ? (positions.length ? "默认合约市场 " + longs + " 多 / " + shorts + " 空" : "默认合约市场无持仓") : "持仓暂不可用";
         value = '<dl class="watch-values"><div><dt>账户权益</dt><dd>' + esc(money(summary.equity)) +
           '</dd></div><div><dt>24 小时盈亏</dt><dd class="' + ui.tone(summary.pnl) + '">' + esc(money(summary.pnl, { signed: true })) +
           '</dd></div></dl><p class="watch-meta">' + esc(details) + ' · ' + esc(formatting.format(data.at)) + '</p>';
@@ -258,25 +280,29 @@ export function setupWorkspace(ui) {
     }).catch(error => { if (token === sequence) $("activity-data").innerHTML = tip("无法获取成交记录。 " + (error.status ? "HTTP " + error.status : (error.timeout ? "请求超时" : "连接或响应异常"))); });
   }
 
-  function comparisonPage(token) {
+  function renderComparison() {
+    if (!comparison.open) return;
     const mine = own();
     const watch = profile.wallets.filter(row => row.address !== mine?.address);
     compareAddress = watch.some(row => row.address === compareAddress) ? compareAddress : watch[0]?.address;
-    viewRoot.innerHTML = titled("仓位对比", "对比 Hyperliquid 主市场快照。仓位占比按名义价值 ÷ 账户权益计算。") +
-      (!mine || !compareAddress ? noWallet("给一个地址设置「我的钱包」，再添加关注钱包。") :
-        panel('<div class="workspace-toolbar">' + field("跟谁对比", select("compare-wallet", compareAddress, watch), "flex") +
-          button("refresh-view", "刷新") + '</div><div id="compare-data">' + tip("正在读取两边仓位…") + '</div>'));
-    if (!mine || !compareAddress) return;
+    if (!mine || !compareAddress) {
+      comparisonContent.innerHTML = tip("在「钱包」设置我的钱包，并添加一个关注钱包。");
+      return;
+    }
+    comparisonContent.innerHTML = '<div class="workspace-toolbar">' +
+      field("跟谁对比", select("compare-wallet", compareAddress, watch), "flex") +
+      button("refresh-comparison", "刷新") + '</div><div id="compare-data">' + tip("正在读取两边仓位…") + '</div>';
+    const output = $("compare-data");
     const other = selectedWallet(compareAddress);
     Promise.all([briefOnly(mine.address), briefOnly(other.address), recentFills(other.address).catch(() => null)]).then(([left, right, recent]) => {
-      if (token !== sequence) return;
-      if (!left.positions || !right.positions) { $("compare-data").innerHTML = tip("其中一个钱包的仓位快照无法读取。"); return; }
+      if (!output.isConnected || !comparison.open) return;
+      if (!left.positions || !right.positions) { output.innerHTML = tip("其中一个钱包的仓位快照无法读取。"); return; }
       const a = new Map(left.positions.map(row => [row.coin, row]));
       const b = new Map(right.positions.map(row => [row.coin, row]));
       const ae = portfolioBrief(left.history).equity;
       const be = portfolioBrief(right.history).equity;
       const format = (row, equity) => row ? esc((row.size > 0 ? "多" : "空") + " " + quantity(Math.abs(row.size))) +
-        '<div class="subtle">' + esc("均价 " + money(row.entry) + " · 占权益 " + ui.percent(equity > 0 && row.value !== null ? row.value / equity * 100 : null)) + '</div>' : "当前无仓";
+        '<div class="subtle">' + esc("均价 " + money(row.entry) + " · 仓位杠杆率 " + ui.leverage(row.value, equity)) + '</div>' : "当前无仓";
       const mostRecent = new Map(positionChanges(recent).map(change => [change.coin, change]));
       const recentCloses = [...mostRecent].filter(([coin, change]) => !coin.includes(":") && !b.has(coin) && change.action === "close").map(([coin]) => coin);
       const rows = [...new Set([...a.keys(), ...b.keys(), ...recentCloses])].map(coin => {
@@ -284,8 +310,8 @@ export function setupWorkspace(ui) {
         const their = b.get(coin);
         return [esc(coin), format(my, ae), format(their, be), my && their ? (Math.sign(my.size) === Math.sign(their.size) ? "同向" : "反向") : recentCloses.includes(coin) ? "对方近 7 天已平仓" : my ? "仅我持有" : "仅对方持有"];
       });
-      $("compare-data").innerHTML = table(["合约", walletName(mine), walletName(other), "方向差异"], rows);
-    }).catch(() => { if (token === sequence) $("compare-data").innerHTML = tip("仓位暂时无法读取，请稍后刷新。"); });
+      output.innerHTML = table(["合约", walletName(mine), walletName(other), "方向差异"], rows);
+    }).catch(() => { if (output.isConnected && comparison.open) output.innerHTML = tip("仓位暂时无法读取，请稍后刷新。"); });
   }
 
   function pnlPage(token) {
@@ -305,53 +331,127 @@ export function setupWorkspace(ui) {
     ]).then(([fills, funding, ledger, brief]) => {
       if (token !== sequence) return;
       const rows = result => Array.isArray(result.value) ? result.value : null;
-      const totals = metricsFor(rows(fills), rows(funding), rows(ledger));
+      const ledgerRows = rows(ledger);
+      const totals = metricsFor(rows(fills), rows(funding), ledgerRows);
+      const movements = cashMovements(ledgerRows).filter(item => item.time > 0).sort((a, b) => b.time - a.time);
       const positions = brief.value?.positions;
       const floating = positions?.every(row => row.pnl !== null) ? positions.reduce((sum, row) => sum + row.pnl, 0) : null;
       const feeDisplay = totals.fees === null ? "—" : totals.fees.length ? totals.fees.map(([token, value]) => quantity(value) + " " + token).join(" / ") : "0";
-      const cards = [["已实现盈亏", money(totals.realized, { signed: true })], ["当前浮盈亏 · 主市场", money(floating, { signed: true })],
+      const cards = [["已实现盈亏", money(totals.realized, { signed: true })], ["当前浮盈亏 · 默认合约市场", money(floating, { signed: true })],
         ["成交手续费 · 原币种", feeDisplay], ["资金费 · 接口金额", money(totals.funding, { signed: true })],
         ["净充值提现 · USDC", money(totals.cashFlow, { signed: true })]];
       $("pnl-data").innerHTML = '<div class="readout-grid">' + cards.map(([name, value]) => '<div class="readout"><small>' + esc(name) + '</small><strong>' + esc(value) + '</strong></div>').join("") +
-        '</div><p class="hint">已实现盈亏按成交接口的 closedPnl 汇总。净充值提现只统计充值与提现记录。</p>' +
+        '</div><p class="hint">已实现盈亏按成交接口的 closedPnl 汇总。入金和出金单独列出。</p>' +
+        (ledgerRows === null ? '' : '<h2>入金与出金</h2>' + (movements.length ? '<div class="timeline">' +
+          movements.slice(0, 15).map(item => '<div class="timeline-row"><time>' + esc(formatting.format(item.time)) + '</time><span>' +
+            (item.type === "deposit" ? "入金 " : "出金 ") +
+            esc(money(item.type === "deposit" ? item.amount : -item.amount, { signed: true })) + '</span></div>').join("") + '</div>' +
+          (movements.length > 15 ? '<p class="hint">显示最近 15 笔。</p>' : '') : tip("该区间暂无出入金记录。"))) +
         (totals.truncated ? '<p class="hint">成交达到接口返回上限，金额可能不完整。可选择更短区间。</p>' : '') +
         ([fills, funding, ledger, brief].some(item => item.status === "rejected") ? '<p class="hint">部分数据读取失败，对应项目显示为 —。</p>' : '');
     });
   }
 
-  function riskPage() {
-    const session = ui.session();
-    const brief = portfolioBrief(session.history);
-    const rows = (session.positions ?? []).map(row => {
-      const gap = gapToLiquidation(row);
-      const danger = gap !== null && gap <= 5;
-      const margin = [row.leverage ? quantity(row.leverage) + "×" : "", row.mode === "cross" ? "全仓" : row.mode === "isolated" ? "逐仓" : ""].filter(Boolean).join(" · ");
-      return [esc(row.coin), esc((row.size < 0 ? "空" : "多") + " " + quantity(Math.abs(row.size))),
-        esc(margin || "—"), esc(money(row.margin)),
-        esc(ui.percent(brief.equity > 0 && row.value !== null ? row.value / brief.equity * 100 : null)),
-        (danger ? '<span class="danger">' : '<span>') + esc(money(row.liquidation)) + '</span><div class="subtle">' + esc(gap === null ? "暂无距离数据" : "相距 " + ui.percent(gap)) + '</div>'];
+  const selectedNotificationFields = () =>
+    [...viewRoot.querySelectorAll('[name="notification-field"]:checked')].map(item => item.value);
+
+  function readEquityChangeRule() {
+    return cleanEquityChangeAlert({
+      up: $("equity-change-up").value, down: $("equity-change-down").value,
     });
-    const content = session.positions ? table(["合约", "方向与数量", "杠杆 / 模式", "保证金占用", "名义仓位 / 权益", "预估强平价"], rows) : tip("正在读取持仓…");
-    viewRoot.innerHTML = titled("持仓风险", session.user ? "当前观察 " + (selectedWallet(session.user)?.name || session.user.slice(0, 6) + "…" + session.user.slice(-4)) : "当前显示演示仓位。") +
-      panel(content + '<p class="hint">预估强平价使用 Hyperliquid 返回的字段。' +
-        (session.scope === "main" ? "此快照覆盖主市场。" : "") + '</p>');
+  }
+
+  let previewWalletName = ui.load("notification-preview-wallet", "示例钱包");
+
+  function notificationPreviewSettings() {
+    return {
+      type: $("notification-preview-type").value,
+      name: previewWalletName,
+      notificationFields: selectedNotificationFields(),
+      up: $("equity-change-up").value,
+      down: $("equity-change-down").value,
+    };
+  }
+
+  function updateNotificationPreview() {
+    const settings = notificationPreviewSettings();
+    $("preview-wallet-field").hidden = settings.type !== "trade" || !settings.notificationFields.includes("wallet");
+    const content = formatNotificationPreview(settings);
+    $("notification-preview-title").textContent = content.title;
+    $("notification-preview-body").textContent = content.body;
+    $("notification-preview-body").hidden = !content.body;
   }
 
   function alertPage() {
     const rule = profile.rules;
-    viewRoot.innerHTML = titled("提醒设置", "关注钱包的仓位变动及我的仓位阈值。") +
+    const equityChangeRule = rule.equityChangeAlert;
+    viewRoot.innerHTML = titled("提醒设置", "设置仓位变动、账户权益涨跌幅和我的钱包阈值。") +
       panel('<h2>仓位变动</h2><div class="rule-actions">' +
         Object.entries(actionLabels).map(([key, label]) => check("rule-action", key, rule.actions.includes(key), label)).join("") +
-        '</div><p class="hint">钱包列表中勾选「接收这个钱包的仓位变动」后适用。</p><h2>我的钱包阈值</h2><div class="rule-thresholds">' +
-        field("账户权益低于 USD", '<input type="number" min="0.01" step="any" id="rule-equity" value="' + esc(rule.equity ?? "") + '">') +
-        field("主市场浮亏达到 USD", '<input type="number" min="0.01" step="any" id="rule-loss" value="' + esc(rule.loss ?? "") + '">') +
-        field("离预估强平价低于 %", '<input type="number" min="0.01" max="100" step="any" id="rule-gap" value="' + esc(rule.gap ?? "") + '">') + '</div>' +
+        '</div><p class="hint">钱包列表中勾选「接收这个钱包的仓位变动」后适用。</p><h2>交易通知内容</h2><div class="rule-actions">' +
+        Object.entries(notificationFieldLabels).map(([key, label]) => check("notification-field", key, rule.notificationFields.includes(key), label)).join("") +
+        '</div><p class="hint">可只保留标题。已实现盈亏只在减仓、平仓或反手时显示。可把当前预览发送到已开启通知的本机。</p>' +
+        '<div class="notification-preview">' + field("通知预览", '<select id="notification-preview-type"><option value="trade">交易通知</option>' +
+          '<option value="up">上涨提醒</option><option value="down">下跌提醒</option></select>') +
+        '<div id="preview-wallet-field">' + field("预览钱包名称", '<input id="preview-wallet-name" maxlength="28" value="' +
+          esc(previewWalletName) + '" placeholder="示例钱包">') + '</div>' +
+        '<strong id="notification-preview-title"></strong><p id="notification-preview-body"></p>' +
+        '<div class="notification-preview-actions">' + button("push-preview", "发送当前预览") +
+        '<span id="push-preview-feedback" class="status-inline" role="status"></span></div></div>' +
+        '<h2>我的账户权益提醒</h2><h3 class="equity-rule-heading">从上次基准涨跌</h3><div class="rule-thresholds">' +
+        field("上涨达到（%）", '<input type="number" min="0.01" max="100" step="any" id="equity-change-up" value="' + esc(equityChangeRule?.up ?? "") + '">') +
+        field("下跌达到（%）", '<input type="number" min="0.01" max="100" step="any" id="equity-change-down" value="' + esc(equityChangeRule?.down ?? "") + '">') + '</div>' +
+        '<p class="hint">监控「我的钱包」的账户总权益。以启用后首次读到的权益为基准，触发后用当时的权益作为新基准。留空关闭对应方向。</p>' +
+        '<p id="equity-change-levels" class="hint" aria-live="polite"></p>' +
+        '<h3 class="equity-rule-heading">低于固定金额或从最高点回落</h3><div class="rule-thresholds">' +
+        field("账户权益提醒方式", '<select id="rule-equity-mode">' +
+          choose("amount", rule.equityMode, "固定金额") + choose("percent", rule.equityMode, "从最高点回落") + '</select>') +
+        '<div id="rule-equity-amount-field"' + (rule.equityMode === "percent" ? " hidden" : "") + '>' +
+          field("权益降到（USD）", '<input type="number" min="0.01" max="1000000000000" step="any" id="rule-equity" value="' + esc(rule.equityMode === "amount" ? rule.equity ?? "" : "") + '">') +
+        '</div><div id="rule-equity-percent-field"' + (rule.equityMode === "amount" ? " hidden" : "") + '>' +
+          field("从最高点下跌（%）", '<input type="number" min="0.01" max="100" step="any" id="rule-equity-percent" value="' + esc(rule.equityMode === "percent" ? rule.equity ?? "" : "") + '">') +
+        '</div>' +
+        '</div><p id="equity-floor-levels" class="hint" aria-live="polite"></p>' +
+        '<h2>其他仓位提醒</h2><div class="rule-thresholds">' +
+        field("合约净浮亏达到（USD）", '<input type="number" min="0.01" max="1000000000000" step="any" id="rule-loss" value="' + esc(rule.loss ?? "") + '">') +
+        field("距离强平还剩（%）", '<input type="number" min="0.01" max="100" step="any" id="rule-gap" value="' + esc(rule.gap ?? "") + '">') + '</div>' +
+        '<p class="hint">浮亏和强平距离统计默认合约市场。留空关闭对应提醒。</p>' +
         button("save-rules", "保存规则") + syncFragment()) +
-      panel('<h2>本机通知</h2><p class="hint" id="push-note">正在检查本机通知能力…</p><div id="push-controls" class="workspace-toolbar" hidden>' +
+      panel('<h2>后台通知</h2><p class="hint" id="cloud-scan-note" aria-live="polite">正在读取云端检查状态…</p>' +
+        '<p class="hint" id="push-delivery-note" aria-live="polite"></p><p class="hint" id="push-note">正在检查本机通知能力…</p><div id="push-controls" class="workspace-toolbar" hidden>' +
         button("push-enable", "开启本机通知") + button("push-test", "发测试通知") + button("push-disable", "关闭本机通知") + '</div><span id="push-feedback" class="status-inline" role="status"></span>') +
       panel('<div class="inline-row"><h2>提醒记录</h2>' + button("reload-inbox", "刷新") + '</div><div id="alert-inbox">' + tip("正在读取…") + '</div>');
+    updateNotificationPreview();
+    refreshEquityLevels();
+    refreshCloudHealth();
     refreshPushControls();
     inbox();
+  }
+
+  async function refreshEquityLevels() {
+    const change = $("equity-change-levels");
+    const floor = $("equity-floor-levels");
+    if (!siteRuntime || !change || !floor) return;
+    try {
+      const levels = await request("/api/equity-alert-levels");
+      if (!change.isConnected || !floor.isConnected) return;
+      if (!levels.hasWallet) {
+        change.textContent = "先在「钱包」设置我的钱包。";
+        floor.textContent = "";
+        return;
+      }
+      const rolling = levels.change;
+      change.textContent = !rolling ? "已保存规则：关闭" : rolling.baseline === null ? "已保存规则：等待云端读取基准" :
+        ["当前基准 " + money(rolling.baseline),
+          rolling.up !== null && "上涨提醒线 " + money(rolling.up),
+          rolling.down !== null && "下跌提醒线 " + money(rolling.down)].filter(Boolean).join(" · ");
+      const bound = levels.floor;
+      floor.textContent = !bound ? "已保存规则：关闭" : !bound.peakMode ? "固定提醒线 " + money(bound.down)
+        : bound.peak === null ? "已保存规则：等待云端记录最高权益"
+        : "追踪最高权益 " + money(bound.peak) + " · 下跌提醒线 " + money(bound.down);
+    } catch {
+      if (change.isConnected) change.textContent = "暂时无法读取已保存规则的基准。";
+    }
   }
 
   async function inbox() {
@@ -362,10 +462,26 @@ export function setupWorkspace(ui) {
       const response = await request("/api/inbox");
       if (!el.isConnected) return;
       el.innerHTML = response.items.length ? '<div class="timeline">' + response.items.map(item =>
-        '<div class="timeline-row"><time>' + esc(formatting.format(item.time)) + '</time><span>' + esc(item.body) + '</span></div>').join("") + '</div>' :
+        '<div class="timeline-row"><time>' + esc(formatting.format(item.time)) + '</time><div class="alert-body">' +
+        (item.title ? '<strong>' + esc(item.title) + '</strong><br>' : '') + esc(item.body) + '</div></div>').join("") + '</div>' :
         tip("暂无提醒。先保存规则并开启本机通知。");
     } catch {
       if (el.isConnected) el.innerHTML = tip("提醒记录暂时无法读取。");
+    }
+  }
+
+  async function refreshCloudHealth() {
+    const note = $("cloud-scan-note");
+    if (!siteRuntime || !note) return;
+    try {
+      const { cloud } = await request("/api/alert-health");
+      if (!note.isConnected) return;
+      note.textContent = cloud
+        ? "最近云端检查：" + formatting.format(cloud.time) +
+          (cloud.failures ? " · " + cloud.failures + " 项数据读取异常" : " · 已检查 " + cloud.checked + " 项")
+        : "暂无云端检查记录。";
+    } catch {
+      if (note.isConnected) note.textContent = "暂时无法读取云端检查状态。";
     }
   }
 
@@ -384,28 +500,57 @@ export function setupWorkspace(ui) {
       pushRegistration ||= await navigator.serviceWorker.register("/sw.js");
       if (!el.isConnected) return;
       const subscription = await pushRegistration.pushManager.getSubscription();
+      const status = subscription ? await request("/api/push-status", "POST", { endpoint: subscription.endpoint }) : {};
+      const enabled = status.enabled;
       if (!el.isConnected) return;
-      el.textContent = subscription ? "本机已订阅浏览器推送。后台按计划检查规则。" :
-        "开启后可接收后台提醒。iPhone 从主屏幕图标打开进行授权。";
+      const delivery = $("push-delivery-note");
+      const previous = status.push;
+      const descriptions = { sent: "推送服务已接收", retry: "服务限流，等待重试", expired: "订阅已过期", failed: "推送提交失败" };
+      delivery.textContent = previous ? "本机最近" + (previous.test ? "测试" : "提醒") + "推送：" +
+        formatting.format(previous.time) + " · " + descriptions[previous.state] :
+        enabled ? "本机暂无推送提交记录。" : "";
+      el.textContent = enabled ? "本机已开启通知。关闭看板后，云端仍会监听成交并推送提醒。" :
+        "每台设备需单独开启通知。iPhone 或 iPad 请从主屏幕图标打开后开启。";
       $("push-controls").hidden = false;
-      $("push-enable").hidden = Boolean(subscription);
-      $("push-disable").hidden = !subscription;
-      $("push-test").hidden = !subscription;
+      $("push-enable").hidden = Boolean(enabled);
+      $("push-disable").hidden = !enabled;
+      $("push-test").hidden = !enabled;
     } catch {
       if (el.isConnected) el.textContent = "浏览器通知暂时无法准备，请从站点首页重新打开。";
     }
   }
 
+  let sendingTest = false;
   async function devicePush(action) {
-    const message = $("push-feedback");
-    if (!pushRegistration || !pushConfig?.publicKey) return;
+    const preview = action === "preview";
+    const testing = preview || action === "test";
+    const message = $(preview ? "push-preview-feedback" : "push-feedback");
+    if (testing && sendingTest) return;
+    if (!pushRegistration || !pushConfig?.publicKey) {
+      message.textContent = "请先在下方开启本机通知。";
+      return;
+    }
+    const previewSettings = preview ? notificationPreviewSettings() : null;
+    const testFields = action === "test" ? selectedNotificationFields() : null;
+    const sendButton = testing ? $(preview ? "push-preview" : "push-test") : null;
+    if (sendButton) {
+      sendingTest = true;
+      sendButton.disabled = true;
+      message.textContent = "正在发送…";
+    }
     try {
       if (action === "enable") {
+        const permission = Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
+        if (permission !== "granted") {
+          message.textContent = "允许浏览器和系统发送通知后，请重试。";
+          return;
+        }
         const raw = atob(pushConfig.publicKey.replace(/-/g, "+").replace(/_/g, "/"));
         const key = Uint8Array.from(raw, char => char.charCodeAt(0));
-        const subscription = await pushRegistration.pushManager.subscribe({ applicationServerKey: key, userVisibleOnly: true });
+        const existing = await pushRegistration.pushManager.getSubscription();
+        const subscription = existing ?? await pushRegistration.pushManager.subscribe({ applicationServerKey: key, userVisibleOnly: true });
         try { await request("/api/push-device", "POST", subscription.toJSON()); }
-        catch (error) { await subscription.unsubscribe(); throw error; }
+        catch (error) { if (!existing) await subscription.unsubscribe(); throw error; }
         message.textContent = "本机已开启通知。可以发一条测试通知。";
       } else {
         const subscription = await pushRegistration.pushManager.getSubscription();
@@ -415,12 +560,20 @@ export function setupWorkspace(ui) {
           await subscription.unsubscribe();
           message.textContent = "已关闭本机通知。";
         } else {
-          await request("/api/push-test", "POST", { endpoint: subscription.endpoint });
-          message.textContent = "测试通知已提交。";
+          await request("/api/push-test", "POST", {
+            endpoint: subscription.endpoint,
+            ...(preview ? { preview: previewSettings } : { notificationFields: testFields }),
+          });
+          message.textContent = "已提交推送，请查看本机通知。";
         }
       }
     } catch (error) {
       message.textContent = error.name === "NotAllowedError" ? "本机通知权限未开启，请检查系统或浏览器通知设置。" : error.message;
+    } finally {
+      if (sendButton) {
+        sendingTest = false;
+        sendButton.disabled = false;
+      }
     }
     refreshPushControls();
   }
@@ -429,12 +582,17 @@ export function setupWorkspace(ui) {
     const token = ++sequence;
     $("dashboard").hidden = active !== "over";
     viewRoot.hidden = active === "over";
-    if (active === "over") return;
-    ({ wallets: walletsPage, activity: activityPage, compare: comparisonPage, pnl: pnlPage, risk: riskPage, alerts: alertPage })[active](token);
+    if (active === "over") { renderComparison(); return; }
+    ({ wallets: walletsPage, activity: activityPage, pnl: pnlPage, alerts: alertPage })[active](token);
     syncStatus();
   }
 
   function show(next, changeHash = true) {
+    if (next === "compare") {
+      comparison.open = true;
+      next = "over";
+      changeHash = true;
+    }
     const matched = [...$("workspace-tabs").querySelectorAll("button")].find(el => el.dataset.view === next);
     if (!matched) next = "over";
     active = next;
@@ -445,6 +603,21 @@ export function setupWorkspace(ui) {
     render();
   }
 
+  comparison.addEventListener("toggle", () => {
+    if (!comparison.open) comparisonContent.replaceChildren();
+    else if (active === "over" && !comparisonContent.hasChildNodes()) renderComparison();
+  });
+  comparisonContent.addEventListener("change", ({ target }) => {
+    if (target.id !== "compare-wallet") return;
+    compareAddress = target.value;
+    renderComparison();
+  });
+  comparisonContent.addEventListener("click", event => {
+    if (event.target.closest("button")?.id !== "refresh-comparison") return;
+    briefCache.clear();
+    fillsCache.clear();
+    renderComparison();
+  });
   $("workspace-tabs").addEventListener("click", event => {
     const next = event.target.closest("button")?.dataset.view;
     if (next) show(next);
@@ -480,20 +653,47 @@ export function setupWorkspace(ui) {
       case "push-enable": devicePush("enable"); break;
       case "push-disable": devicePush("disable"); break;
       case "push-test": devicePush("test"); break;
-      case "save-rules":
+      case "push-preview": devicePush("preview"); break;
+      case "save-rules": {
+        const equityMode = $("rule-equity-mode").value;
+        const equityInput = $(equityMode === "percent" ? "rule-equity-percent" : "rule-equity");
+        if (![equityInput, $("rule-loss"), $("rule-gap"), $("equity-change-up"), $("equity-change-down")].every(input => input.reportValidity())) break;
+        const equityChangeAlert = readEquityChangeRule();
+        if (equityChangeAlert) {
+          const previous = profile.rules.equityChangeAlert;
+          const unchanged = previous?.up === equityChangeAlert.up && previous?.down === equityChangeAlert.down;
+          equityChangeAlert.id = unchanged && previous.id ? previous.id : crypto.randomUUID();
+        }
         update({ ...profile, rules: {
           actions: [...viewRoot.querySelectorAll('[name="rule-action"]:checked')].map(item => item.value),
-          equity: $("rule-equity").value, loss: $("rule-loss").value, gap: $("rule-gap").value,
+          notificationFields: selectedNotificationFields(), equityChangeAlert,
+          equityMode, equity: equityInput.value, equityTrackingId: profile.rules.equityTrackingId,
+          loss: $("rule-loss").value, gap: $("rule-gap").value,
         } });
         break;
+      }
     }
   });
+  viewRoot.addEventListener("input", ({ target }) => {
+    if (target.id === "preview-wallet-name") {
+      previewWalletName = target.value;
+      ui.store("notification-preview-wallet", previewWalletName);
+    }
+    if (["preview-wallet-name", "equity-change-up", "equity-change-down"].includes(target.id)) updateNotificationPreview();
+  });
   viewRoot.addEventListener("change", ({ target }) => {
+    if (target.name === "notification-field" || target.id === "notification-preview-type") {
+      updateNotificationPreview();
+      return;
+    }
     switch (target.id) {
+      case "rule-equity-mode":
+        $("rule-equity-amount-field").hidden = target.value === "percent";
+        $("rule-equity-percent-field").hidden = target.value !== "percent";
+        return;
       case "wallet-group-filter": watchGroup = target.value; break;
       case "activity-wallet": activityAddress = target.value; break;
       case "event-filter": eventFilter = target.value; break;
-      case "compare-wallet": compareAddress = target.value; break;
       case "pnl-wallet": pnlAddress = target.value; break;
       case "pnl-range": range = target.value; break;
       default: return;
@@ -509,27 +709,31 @@ export function setupWorkspace(ui) {
     sync();
     setInterval(() => { if (!document.hidden) sync(dirty); }, 45000);
   }
-  let lastAlertCheck = 0;
+  const foregroundAlertInterval = 15000;
+  let checkingAlerts = false;
   async function checkWhileOpen() {
-    if (!siteRuntime || document.hidden || dirty || Date.now() - lastAlertCheck < 22000) return;
-    const { actions, equity, loss, gap } = profile.rules;
+    if (!siteRuntime || document.hidden || dirty || checkingAlerts) return;
+    const { actions, equity, loss, gap, equityChangeAlert } = profile.rules;
     const applies = (actions.length && profile.wallets.some(wallet => wallet.notify)) ||
-      (own() && (equity || loss || gap));
+      (own() && (equity || loss || gap || equityChangeAlert));
     if (!applies) return;
-    lastAlertCheck = Date.now();
+    checkingAlerts = true;
     try {
       await request("/api/run-alerts", "POST");
-      if (active === "alerts") inbox();
+      if (active === "alerts") { inbox(); refreshEquityLevels(); }
     } catch {
       // The next check retries through the same endpoint.
+    } finally {
+      checkingAlerts = false;
     }
   }
-  if (siteRuntime) setInterval(checkWhileOpen, 25000);
+  if (siteRuntime) setInterval(checkWhileOpen, foregroundAlertInterval);
+  setInterval(() => { if (!document.hidden && active === "wallets") loadCards(); }, 10000);
   setInterval(() => {
     if (document.hidden) return;
-    if (active === "wallets") loadCards();
-    if (active === "activity" || active === "compare") render();
-    if (active === "alerts") inbox();
+    if (active === "activity") render();
+    if (active === "over" && comparison.open && !comparisonContent.contains(document.activeElement)) renderComparison();
+    if (active === "alerts") { inbox(); refreshEquityLevels(); refreshCloudHealth(); refreshPushControls(); }
   }, 45000);
-  return { onSnapshot: () => { if (active === "risk") riskPage(); } };
+  return { refreshComparison: renderComparison };
 }

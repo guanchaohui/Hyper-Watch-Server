@@ -27,7 +27,13 @@ if ! docker compose up -d --build --wait --wait-timeout 180 hyper; then
   exit 1
 fi
 
-binding="$(docker compose port hyper 8788)"
+container="$(docker compose ps -q hyper)"
+network_mode="$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$container")"
+if [[ "$network_mode" == host ]]; then
+  binding="$(docker compose exec -T hyper node -p 'process.env.HOST + ":" + process.env.PORT')"
+else
+  binding="$(docker compose port hyper 8788)"
+fi
 if [[ ! "$binding" =~ ^127\.0\.0\.1:[0-9]{1,5}$ ]]; then
   printf '无法确认看板的本机监听地址，请检查 Compose 的端口映射。\n' >&2
   exit 1

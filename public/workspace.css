@@ -57,7 +57,7 @@
 .rule-actions { display: flex; flex-wrap: wrap; gap: 8px 17px; padding: 9px 0; }
 .check { display: inline-flex; align-items: center; gap: 6px; }
 .check input { accent-color: var(--mint); }
-.rule-thresholds { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; margin: 12px 0; }
+.rule-thresholds { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin: 12px 0; }
 .status-inline { display: block; color: var(--muted); margin-top: 8px; font-size: 12px; }
 .footer-end { display: flex; align-items: center; gap: 8px; }
 .diagnostics-list { margin: 13px 0 0; padding: 0; list-style: none; }
@@ -69,7 +69,8 @@
 .quick-mode .holdings { order: 1; margin-bottom: 12px; }
 .quick-mode .trend-panel { order: 2; margin-bottom: 12px; }
 .quick-mode .exposure-panel { order: 3; }
-.quick-mode .footer { order: 4; }
+.quick-mode .overview-comparison { order: 4; }
+.quick-mode .footer { order: 5; }
 .quick-mode .chart-container { height: 155px; }
 .quick-mode .ring-area { flex-direction: row; gap: 20px; }
 .quick-mode .ring { width: 110px; height: 110px; flex: none; margin: 5px 0; }
@@ -99,3 +100,23 @@
   .rule-thresholds { grid-template-columns: 1fr; }
   .readout-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
+.alert-body { white-space: pre-line; }
+
+.overview-comparison { margin-top: 12px; }
+.overview-comparison summary { cursor: pointer; padding: 11px 15px; font-weight: 680; }
+.overview-comparison[open] summary { border-bottom: 1px solid var(--quiet-line); }
+#overview-comparison-content { padding: 12px 15px; }
+.total-leverage strong { grid-column: 2 / -1; }
+@media (max-width: 660px) {
+  .overview-comparison { order: 3; }
+  #dashboard .footer { order: 4; }
+  .quick-mode #dashboard .footer { order: 5; }
+}
+
+.notification-preview { margin: 10px 0 16px; padding: 10px 12px; background: var(--panel-raised); border: 1px solid var(--line); border-radius: 10px; }
+.notification-preview .field { max-width: 190px; margin-bottom: 8px; }
+.notification-preview p { white-space: pre-wrap; color: var(--muted); overflow-wrap: anywhere; margin-top: 2px; }
+
+.equity-rule-heading { margin: 12px 0 0; color: var(--text); font-size: 13px; }
+
+.notification-preview-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 9px; }

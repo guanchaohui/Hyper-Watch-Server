@@ -3,12 +3,30 @@ self.addEventListener("activate", event => event.waitUntil(self.clients.claim())
 self.addEventListener("push", event => {
   let item;
   try { item = event.data?.json(); } catch {}
-  event.waitUntil(self.registration.showNotification(item?.title || "Hyper 盯盘", {
-    body: item?.body || "你有一条新的盯盘提醒。",
-    tag: item?.tag || "hyper-watch",
-    icon: "/icon.png",
-    data: { path: "/#alerts" },
-  }));
+  event.waitUntil((async () => {
+    let confirmedAccount = false;
+    if (item?.account) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000);
+      try {
+        const response = await fetch("/api/account", {
+          cache: "no-store", credentials: "same-origin", signal: controller.signal,
+        });
+        confirmedAccount = response.ok && (await response.json()).username === item.account;
+      } catch {
+        // Still show a notification if the browser wakes while the server is unreachable.
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+    await self.registration.showNotification((confirmedAccount && item.title) || "盯盘提醒", {
+      body: confirmedAccount ? (item.body ?? "") : "你有一条新的盯盘提醒，打开看板查看。",
+      tag: (confirmedAccount && item.tag) || "hyper-watch",
+      icon: "/icon.png",
+      ...(confirmedAccount && Number.isFinite(item.timestamp) ? { timestamp: item.timestamp } : {}),
+      data: { path: "/#alerts" },
+    });
+  })());
 });
 self.addEventListener("notificationclick", event => {
   event.notification.close();

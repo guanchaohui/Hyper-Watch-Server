@@ -31,3 +31,7 @@
 .login-panel .btn { margin-top: 9px; min-height: 44px; }
 .login-panel input:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
 .login-panel .notice { margin-bottom: 16px; }
+
+.login-panel small, .account-links { color: var(--muted); }
+.account-links { margin: 14px 0 0; }
+.login-panel a:not(.brand) { color: var(--mint); }

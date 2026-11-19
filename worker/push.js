@@ -1,3 +1,5 @@
+import { retryAfterMs } from "./retry.js";
+
 const encoder = new TextEncoder();
 const txt = value => encoder.encode(value);
 
@@ -76,27 +78,57 @@ async function token(env, origin) {
   return input + "." + base64url(signature);
 }
 
+const retryByEndpoint = new Map();
+const retryByOrigin = new Map();
+const retryInterval = 60_000;
+
+function retryBlocked(subscriptions, key, now) {
+  for (const [target, until] of subscriptions) if (until <= now) subscriptions.delete(target);
+  return subscriptions.has(key);
+}
+
 export async function sendPush(env, subscription, message) {
   if (!cleanSubscription(subscription)) return "expired";
   const origin = new URL(subscription.endpoint).origin;
+  const now = Date.now();
+  if (retryBlocked(retryByOrigin, origin, now) || retryBlocked(retryByEndpoint, subscription.endpoint, now)) return "retry";
   const [jwt, body, key] = await Promise.all([
     token(env, origin), sealPush(subscription, message), crypto.subtle.digest("SHA-256", txt(message.tag)),
   ]);
-  const response = await fetch(subscription.endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: "vapid t=" + jwt + ", k=" + env.VAPID_PUBLIC,
-      "Content-Type": "application/octet-stream",
-      "Content-Encoding": "aes128gcm",
-      TTL: "3600",
-      Urgency: "normal",
-      Topic: base64url(key).slice(0, 32),
-    },
-    body,
-    signal: AbortSignal.timeout(8000),
-    redirect: "error",
-  });
+  if ((retryByOrigin.get(origin) ?? 0) > Date.now() || (retryByEndpoint.get(subscription.endpoint) ?? 0) > Date.now()) return "retry";
+  let response;
+  try {
+    response = await fetch(subscription.endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: "vapid t=" + jwt + ", k=" + env.VAPID_PUBLIC,
+        "Content-Type": "application/octet-stream",
+        "Content-Encoding": "aes128gcm",
+        TTL: "3600",
+        Urgency: message.urgency === "high" ? "high" : "normal",
+        Topic: base64url(key).slice(0, 32),
+      },
+      body,
+      signal: AbortSignal.timeout(8000),
+      redirect: "error",
+    });
+  } catch (error) {
+    retryByEndpoint.set(subscription.endpoint, Date.now() + retryInterval);
+    throw error;
+  }
+  await response.body?.cancel();
   if (response.status === 404 || response.status === 410) return "expired";
-  if (!response.ok) throw new Error("Push HTTP " + response.status);
+  if (response.status === 429 || response.status === 503) {
+    const now = Date.now();
+    const delay = retryAfterMs(response.headers.get("retry-after"), retryInterval, now);
+    const targets = response.status === 429 ? retryByOrigin : retryByEndpoint;
+    const target = response.status === 429 ? origin : subscription.endpoint;
+    targets.set(target, Math.max(targets.get(target) ?? 0, now + delay));
+    return "retry";
+  }
+  if (!response.ok) {
+    retryByEndpoint.set(subscription.endpoint, Date.now() + retryInterval);
+    throw new Error("Push HTTP " + response.status);
+  }
   return "sent";
 }

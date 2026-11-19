@@ -50,6 +50,7 @@ export function parsePositions(states) {
       entry: numberOf(position.entryPx),
       mark: value === null ? null : Math.abs(value / size),
       pnl: numberOf(position.unrealizedPnl),
+      returnOnEquity: numberOf(position.returnOnEquity),
       leverage: numberOf(position.leverage?.value),
       mode: position.leverage?.type ?? null,
       margin: numberOf(position.marginUsed),
@@ -82,7 +83,12 @@ export async function queryInfo(type, user, sessionSignal, parameters = {}, endp
       credentials: "same-origin",
       signal: attempt.signal,
     });
-    if (!response.ok) throw Object.assign(new Error("数据接口返回 HTTP " + response.status), { status: response.status });
+    if (!response.ok) {
+      const retrySeconds = Number(response.headers.get("Retry-After")) || 5;
+      throw Object.assign(new Error("数据接口返回 HTTP " + response.status), {
+        status: response.status, retryAt: response.status === 429 ? Date.now() + retrySeconds * 1000 : 0,
+      });
+    }
     return await response.json();
   } catch (error) {
     if (timedOut) throw Object.assign(new Error("请求超时"), { timeout: true });
@@ -195,5 +201,5 @@ export function demoData(now = Date.now()) {
     { coin: "SOL", dex: "", size: 36, value: 6188.04, entry: 172.83, mark: 171.89, pnl: -33.84, leverage: 3 },
   ];
   const spot = [{ coin: "USDC", total: 5820.42, hold: 120 }, { coin: "HYPE", total: 84, hold: 0 }];
-  return { history, positions, spot };
+  return { history, positions: positions.map(row => ({ ...row, margin: row.value / row.leverage })), spot };
 }

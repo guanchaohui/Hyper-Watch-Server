@@ -1,5 +1,6 @@
 import { createChart } from "./chart.js";
 import { setupWorkspace } from "./workspace.js";
+import { gapToLiquidation, periodPnl, portfolioBrief, portfolioPeriodPoints } from "./analytics.js";
 import { addressOf, connectPerps, demoData, info, parsePortfolio, parsePositions, parseSpot } from "./market.js";
 
 const $ = id => document.getElementById(id);
@@ -33,8 +34,14 @@ const time = new Intl.DateTimeFormat("zh-CN", {
 const clock = new Intl.DateTimeFormat("zh-CN", {
   hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
 });
-const preferenceBase = "hyper-watch:";
-const pollEvery = 20000;
+const account = document.documentElement.dataset.account;
+const preferenceBase = account && account !== "owner" ? "hyper-watch:account:" + account + ":" : "hyper-watch:";
+if (account) {
+  window.addEventListener("pageshow", event => {
+    if (event.persisted) location.reload();
+  });
+}
+const pollEvery = 5000;
 const mask = "••••••";
 const drawChart = createChart($("chart"), $("chart-empty"), $("chart-tooltip"), $("tooltip-time"), $("tooltip-value"));
 
@@ -50,11 +57,16 @@ function savePreference(key, value) {
 let masked = loadPreference("private", false) === true;
 let recents = loadPreference("recent", []);
 recents = Array.isArray(recents) ? recents.map(addressOf).filter(Boolean).slice(0, 4) : [];
-let period = "day";
+const pnlSummarySelect = $("pnl-summary-range");
+const savedPnlRange = loadPreference("pnl-summary-range", "day");
+if (["day", "today", "week", "month", "allTime"].includes(savedPnlRange)) pnlSummarySelect.value = savedPnlRange;
+const chinaTime = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+});
+let period = pnlSummarySelect.value;
 let series = "equity";
 let tab = "positions";
 let session;
-let workspace;
 
 function amount(number, options = {}) {
   if (number === null || number === undefined) return "—";
@@ -113,8 +125,8 @@ function renderConnection() {
   const failed = Boolean(s.errors.size);
   const loading = s.requesting && !s.requestedAt;
   const streamLive = live(s);
-  const status = !s.user ? "demo" : failed ? "error" : loading ? "loading" : streamLive ? "live" : "poll";
-  const statusNames = { demo: "演示数据", error: "更新异常", loading: "正在连接", live: "合约实时", poll: "定时刷新" };
+  const status = !s.user ? (s.demo ? "demo" : "idle") : failed ? "error" : loading ? "loading" : streamLive ? "live" : "poll";
+  const statusNames = { idle: "未选择钱包", demo: "演示数据", error: "更新异常", loading: "正在连接", live: "合约实时", poll: "定时刷新" };
   $("status").dataset.state = status;
   if ($("status-label").textContent !== statusNames[status]) $("status-label").textContent = statusNames[status];
   $("refresh").disabled = s.requesting;
@@ -126,11 +138,11 @@ function renderConnection() {
     ? `${errors.map(key => errorNames[key]).join("、")}暂时无法更新。已获取的数据会继续显示。` : "";
   $("notice").hidden = !errors.length;
   if ($("details-dialog").open) renderDiagnostics();
-  const freshness = !s.user ? "当前为演示数据" : s.requestedAt ? "API 最近刷新 " + clock.format(s.requestedAt) : "等待 Hyperliquid 返回数据";
+  const freshness = !s.user ? (s.demo ? "当前为演示数据" : "请选择钱包") : s.requestedAt ? "API 最近刷新 " + clock.format(s.requestedAt) : "等待 Hyperliquid 返回数据";
   $("footer-update").textContent = freshness;
-  const holdingInfo = !s.user ? (tab === "positions" ? "演示持仓" : "演示余额") :
+  const holdingInfo = !s.user ? (s.demo ? (tab === "positions" ? "演示持仓" : "演示余额") : "未选择钱包") :
     tab === "spot" ? (s.errors.has("spot") ? "更新异常" : s.spot ? "定时刷新" : "等待余额") :
-    streamLive ? "实时更新" : s.errors.has("positions") ? "更新异常" : s.positions ? (s.scope === "all" ? "上次快照" : "主市场快照") : "等待持仓";
+    streamLive ? "实时更新" : s.errors.has("positions") ? "更新异常" : s.positions ? (s.scope === "all" ? "上次快照" : "默认市场快照") : "等待持仓";
   $("holding-info").dataset.stream = tab === "positions" && streamLive ? "live" : "";
   $("holding-info-text").textContent = holdingInfo;
 }
@@ -140,8 +152,10 @@ function renderMetrics() {
   const day = s.history?.day;
   const equity = day?.equity?.length ? day.equity : (s.history?.allTime?.equity ?? []);
   const last = equity.at(-1);
-  const daily = day?.pnl.length > 1 ? day.pnl.at(-1)[1] - day.pnl[0][1] : null;
-  const first = day?.equity[0]?.[1];
+  const range = pnlSummarySelect.value;
+  const summary = periodPnl(s.history, range);
+  const daily = summary?.pnl ?? null;
+  const first = summary?.equity;
   const pos = s.positions;
   const unrealized = pos && pos.every(row => row.pnl !== null) ? pos.reduce((sum, row) => sum + row.pnl, 0) : null;
   setNumber("equity", last?.[1]);
@@ -152,13 +166,15 @@ function renderMetrics() {
   change.hidden = !Number.isFinite(relative);
   change.textContent = percent(relative, true);
   change.className = "change " + tone(relative);
-  $("daily-note").textContent = change.hidden ? "按官方盈亏曲线计算" : "相对期初权益";
+  $("daily-note").textContent = summary && range === "today"
+    ? chinaTime.format(summary.start) + " 样本起算"
+    : change.hidden ? "按盈亏历史样本计算" : "相对期初权益";
   $("equity-note").textContent = s.user && last ? "样本时间 " + time.format(last[0]) : "Hyperliquid 账户估值";
-  $("floating-note").textContent = s.user && s.scope === "main" ? "主市场合约持仓" : "当前合约持仓的浮动盈亏";
+  $("floating-note").textContent = s.user && s.scope === "main" ? "默认市场的合约持仓" : "当前合约持仓的浮动盈亏";
 }
 
 function renderExposure() {
-  $("exposure-unit").textContent = session.scope === "main" ? "主市场 · 名义价值" : "按名义价值";
+  $("exposure-unit").textContent = session.scope === "main" ? "默认市场 · 名义价值" : "按名义价值";
   const pos = session.positions;
   const hasValues = pos && pos.every(item => item.value !== null);
   const long = hasValues ? pos.reduce((sum, item) => item.size > 0 ? sum + item.value : sum, 0) : null;
@@ -172,13 +188,14 @@ function renderExposure() {
   setNumber("exposure-short", short);
   $("long-percent").textContent = percent(split);
   $("short-percent").textContent = percent(split === null ? null : 100 - split);
+  $("total-leverage").textContent = leverage(total, portfolioBrief(session.history).equity);
 }
 
 function renderChart() {
   const s = session;
-  const points = s.history?.[period]?.[series] ?? [];
+  const points = portfolioPeriodPoints(s.history, period, series);
   const emptyText = s.errors.has("history") ? "暂时无法读取账户历史" :
-    s.history ? "该时段暂无历史数据" : "正在读取账户历史…";
+    s.history ? "该时段暂无历史数据" : s.user ? "正在读取账户历史…" : "选择钱包后查看账户历史";
   drawChart({ points, series, period, masked, emptyText });
 }
 
@@ -205,11 +222,46 @@ function coinCell(coin, dex = "") {
 }
 
 function sideCell(row) {
-  const side = element("span");
+  const side = element("span", "holding-side");
   const short = row.size < 0;
   side.append(element("span", "direction" + (short ? " short" : ""), short ? "空仓" : "多仓"));
-  if (row.leverage) side.append(element("span", "lev", row.leverage + "×"));
+  const mode = row.mode === "cross" ? "全仓" : row.mode === "isolated" ? "逐仓" : "";
+  const detail = [row.leverage ? quantity(row.leverage) + "×" : "", mode].filter(Boolean).join(" ");
+  if (detail) side.append(element("span", "lev", detail));
   return side;
+}
+
+function leverage(value, equity) {
+  if (!(equity > 0) || !Number.isFinite(value)) return "—";
+  return masked ? mask : (value / equity).toFixed(2) + "×";
+}
+
+function positionRisk(row, equity) {
+  const gap = gapToLiquidation(row);
+  const limit = !masked && gap !== null && gap <= 5 ? "risk-urgent" : "";
+  return [
+    ["保证金占用", amount(row.margin)],
+    ["仓位杠杆率", leverage(row.value, equity)],
+    ["预估强平价格", amount(row.liquidation), limit],
+    ["距离强平还剩", percent(gap), limit],
+  ];
+}
+
+function positionPnl(row) {
+  const ratio = row.returnOnEquity ?? (row.margin > 0 && Number.isFinite(row.pnl) ? row.pnl / row.margin : null);
+  const value = amount(row.pnl, { signed: true });
+  const rate = percent(ratio === null ? null : ratio * 100, true);
+  const pnl = element("span", "position-pnl " + tone(row.pnl));
+  pnl.setAttribute("aria-label", "未实现盈亏 " + value + "，收益率 " + rate);
+  pnl.append(element("span", "position-pnl-amount", value));
+  if (ratio !== null && !masked) pnl.append(element("span", "position-pnl-rate", rate));
+  return pnl;
+}
+
+function addHoldingField(fields, label, value, state = "") {
+  const field = element("div", "mobile-field");
+  field.append(element("dt", "", label), element("dd", state, value));
+  fields.append(field);
 }
 
 function renderHoldings() {
@@ -223,8 +275,8 @@ function renderHoldings() {
   if (!list?.length) {
     const type = spot ? "现货余额" : "合约持仓";
     const missing = s.errors.has(tab);
-    const message = missing ? type + "暂时无法更新" :
-      list ? "当前暂无" + (!spot && s.scope === "main" ? "主市场" : "") + type : "正在读取" + type + "…";
+    const message = !s.user && !s.demo ? "选择钱包后查看" + type : missing ? type + "暂时无法更新" :
+      list ? "当前暂无" + (!spot && s.scope === "main" ? "默认市场" : "") + type : "正在读取" + type + "…";
     body.replaceChildren(element("div", "empty-holdings", message));
     return;
   }
@@ -232,7 +284,7 @@ function renderHoldings() {
   const columns = spot
     ? ["资产", "总数量", "占用数量"]
     : ["合约", "方向", "持仓数量", "开仓价", "标记价", "未实现盈亏"];
-  const table = element("table", "holdings-table");
+  const table = element("table", spot ? "holdings-table" : "holdings-table contract-holdings");
   const heading = table.createTHead().insertRow();
   for (const label of columns) {
     const th = element("th", "", label);
@@ -242,35 +294,48 @@ function renderHoldings() {
 
   const rows = table.createTBody();
   const mobile = element("div", "mobile-holdings");
+  const equity = spot ? null : portfolioBrief(s.history).equity;
   for (const row of list) {
     const fieldValues = spot
       ? [quantity(row.total), quantity(row.hold)]
-      : [quantity(Math.abs(row.size)), amount(row.entry), amount(row.mark), amount(row.pnl, { signed: true })];
+      : [quantity(Math.abs(row.size)), amount(row.entry), amount(row.mark)];
 
     const tr = rows.insertRow();
     tr.insertCell().append(coinCell(row.coin, row.dex));
     if (!spot) tr.insertCell().append(sideCell(row));
-    fieldValues.forEach((value, index) => {
-      const td = tr.insertCell();
-      td.textContent = value;
-      if (!spot && index === 3) td.className = tone(row.pnl);
-    });
+    for (const value of fieldValues) tr.insertCell().textContent = value;
+    if (!spot) tr.insertCell().append(positionPnl(row));
 
     const card = element("article", "mobile-holding" + (spot ? " spot" : ""));
     const top = element("div", "mobile-holding-top");
     top.append(coinCell(row.coin, row.dex));
-    if (!spot) top.append(sideCell(row));
+    if (!spot) top.append(sideCell(row), positionPnl(row));
     const fields = element("dl");
     fieldValues.forEach((value, index) => {
-      const field = element("div", "mobile-field");
-      field.append(element("dt", "", columns[index + (spot ? 1 : 2)]),
-        element("dd", !spot && index === 3 ? tone(row.pnl) : "", value));
-      fields.append(field);
+      addHoldingField(fields, columns[index + (spot ? 1 : 2)], value);
     });
     card.append(top, fields);
+    if (!spot) {
+      const risk = positionRisk(row, equity);
+      const detail = rows.insertRow();
+      detail.className = "position-risk-row";
+      const cell = detail.insertCell();
+      cell.colSpan = columns.length;
+      const desktopFields = element("dl", "position-risk-fields");
+      const mobileFields = element("dl", "position-risk-fields");
+      desktopFields.setAttribute("aria-label", row.coin + " 持仓风险");
+      mobileFields.setAttribute("aria-label", row.coin + " 持仓风险");
+      for (const field of risk) {
+        addHoldingField(desktopFields, ...field);
+        addHoldingField(mobileFields, ...field);
+      }
+      cell.append(desktopFields);
+      card.append(mobileFields);
+    }
     mobile.append(card);
   }
   body.replaceChildren(table, mobile);
+  if (!spot) body.append(element("p", "position-risk-note", "仓位杠杆率＝该仓位价值 ÷ 账户总权益。强平价格由 Hyperliquid 估算。"));
 }
 
 function renderAll() {
@@ -280,7 +345,6 @@ function renderAll() {
   renderChart();
   renderHoldings();
   renderConnection();
-  workspace?.onSnapshot();
 }
 
 function renderPositions() {
@@ -288,7 +352,6 @@ function renderPositions() {
   renderExposure();
   renderHoldings();
   renderConnection();
-  workspace?.onSnapshot();
 }
 
 async function refresh(s = session) {
@@ -302,7 +365,8 @@ async function refresh(s = session) {
   ];
   if (!live(s)) requests.push(["positions", "clearinghouseState", raw => parsePositions([["", raw]])]);
 
-  await Promise.all(requests.map(async ([key, endpoint, parse]) => {
+  const ready = requests.filter(([key]) => (s.problems.get(key)?.retryAt ?? 0) <= Date.now());
+  await Promise.all(ready.map(async ([key, endpoint, parse]) => {
     try {
       const raw = await info(endpoint, s.user, s.controller.signal);
       if (session !== s || (key === "positions" && live(s))) return;
@@ -323,13 +387,13 @@ async function refresh(s = session) {
   renderAll();
 }
 
-function openAccount(user) {
+function openAccount(user, demo = false) {
   if (session) {
     session.controller.abort();
     session.disconnect?.();
   }
   const s = {
-    user, controller: new AbortController(), errors: new Set(),
+    user, demo, controller: new AbortController(), errors: new Set(),
     history: null, positions: null, spot: null, requestedAt: 0, requesting: false,
     disconnect: null, streamAt: 0, scope: "", times: new Map(), problems: new Map(),
   };
@@ -350,7 +414,7 @@ function openAccount(user) {
       renderConnection();
       if (!document.hidden && !s.requesting && s.requestedAt) refresh(s);
     });
-  } else {
+  } else if (demo) {
     Object.assign(s, demoData());
   }
   savePreference("wallet", user);
@@ -367,7 +431,18 @@ function registerChoice(group, prop, update) {
   });
 }
 
-registerChoice("periods", "period", value => { period = value; renderChart(); });
+function changeOverviewRange(value) {
+  period = value;
+  pnlSummarySelect.value = value;
+  savePreference("pnl-summary-range", value);
+  for (const button of $("periods").querySelectorAll("button")) {
+    button.setAttribute("aria-pressed", String(button.dataset.period === value));
+  }
+  renderMetrics();
+  renderChart();
+}
+
+registerChoice("periods", "period", changeOverviewRange);
 registerChoice("series", "series", value => { series = value; renderChart(); });
 registerChoice("holdings-tabs", "tab", value => { tab = value; renderHoldings(); renderConnection(); });
 
@@ -402,7 +477,7 @@ function selectAddress(user) {
     savePreference("recent", recents);
   }
   dialog.close();
-  if (user !== session.user) openAccount(user);
+  if (user !== session.user || (!user && !session.demo)) openAccount(user, !user);
   else if (user && session.errors.size) refresh();
 }
 
@@ -436,14 +511,16 @@ input.addEventListener("keydown", event => {
   }
 });
 input.addEventListener("input", () => reportAddressError(false));
+pnlSummarySelect.addEventListener("change", () => changeOverviewRange(pnlSummarySelect.value));
 $("privacy").addEventListener("click", () => {
   masked = !masked;
   savePreference("private", masked);
   renderAll();
+  workspace.refreshComparison();
 });
 $("refresh").addEventListener("click", () => {
   if (session.user) refresh();
-  else { Object.assign(session, demoData()); renderAll(); }
+  else if (session.demo) { Object.assign(session, demoData()); renderAll(); }
 });
 $("retry").addEventListener("click", () => refresh());
 
@@ -485,10 +562,11 @@ $("diagnostics").addEventListener("click", () => {
 $("close-details").addEventListener("click", () => $("details-dialog").close());
 
 openAccount(addressOf(loadPreference("wallet", "")));
-workspace = setupWorkspace({
+changeOverviewRange(period);
+const workspace = setupWorkspace({
   session: () => session,
   observe: openAccount,
-  amount, quantity, percent, tone,
+  amount, quantity, percent, tone, leverage,
   load: loadPreference, store: savePreference,
 });
 setInterval(() => { if (!document.hidden) refresh(); }, pollEvery);

@@ -21,7 +21,7 @@ fi
 umask 077
 tmpenv="$(mktemp ./.hyper-watch-env.XXXXXX)"
 trap 'rm -f -- "$tmpenv"' EXIT
-read -rsp '设置看板登录密码（至少 16 个字符） ' password
+read -rsp '设置看板登录密码（至少 7 个字符） ' password
 printf '\n' >&2
 read -rsp '再次输入登录密码 ' repeat
 printf '\n' >&2
