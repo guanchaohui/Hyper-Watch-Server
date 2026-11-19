@@ -36,6 +36,21 @@ export function cleanEquityChangeAlert(value) {
   return { up, down, id };
 }
 
+export const equityVolatilityDefaults = { minutes: 15, threshold: 3 };
+export const leverageAlertDefault = 3;
+
+export function cleanEquityVolatility(value) {
+  const minutes = numberOf(value?.minutes);
+  const threshold = numberOf(value?.threshold);
+  if (!Number.isInteger(minutes) || minutes < 5 || minutes > 120 || !(threshold >= 0.01 && threshold <= 100)) return null;
+  return { minutes, threshold };
+}
+
+export function cleanLeverageAlert(value) {
+  const threshold = numberOf(value);
+  return threshold >= 0.01 && threshold <= 1000 ? threshold : null;
+}
+
 export function cleanProfile(value) {
   const wallets = [];
   const seen = new Set();
@@ -62,14 +77,20 @@ export function cleanProfile(value) {
   };
   const equityMode = rules.equityMode === "percent" ? "percent" : "amount";
   const equity = positive("equity");
+  const equityFloor = equityMode === "percent" && equity > 100 ? null : equity;
+  const equityChange = cleanEquityChangeAlert(rules.equityChangeAlert);
   return {
     wallets,
     rules: {
       actions: Object.keys(actionLabels).filter(action => Array.isArray(rules.actions) && rules.actions.includes(action)),
-      equityChangeAlert: cleanEquityChangeAlert(rules.equityChangeAlert),
+      // Keep a saved protection line when older settings have both downside rules.
+      equityChangeAlert: equityFloor && equityChange
+        ? cleanEquityChangeAlert({ ...equityChange, down: null }) : equityChange,
+      equityVolatility: cleanEquityVolatility(rules.equityVolatility),
+      leverageAlert: cleanLeverageAlert(rules.leverageAlert),
       notificationFields: cleanNotificationFields(rules.notificationFields),
       equityMode,
-      equity: equityMode === "percent" && equity > 100 ? null : equity,
+      equity: equityFloor,
       equityTrackingId: equityMode === "percent" && typeof rules.equityTrackingId === "string" &&
         /^[a-f0-9-]{36}$/.test(rules.equityTrackingId) ? rules.equityTrackingId : null,
       loss: positive("loss"),
@@ -133,9 +154,17 @@ export function positionChanges(raw, merge = true) {
 export function portfolioBrief(history) {
   const d = history?.day;
   return {
-    equity: d?.equity.at(-1)?.[1] ?? history?.allTime?.equity.at(-1)?.[1] ?? null,
+    equity: latestEquitySample(history)?.[1] ?? null,
     pnl: d?.pnl.length > 1 ? d.pnl.at(-1)[1] - d.pnl[0][1] : null,
   };
+}
+
+export function latestEquitySample(history) {
+  return history?.day?.equity.at(-1) ?? history?.allTime?.equity.at(-1) ?? null;
+}
+
+export function positionLeverage(notional, equity) {
+  return Number.isFinite(notional) && notional >= 0 && equity > 0 ? notional / equity : null;
 }
 
 export function utc8DayStart(now = Date.now()) {

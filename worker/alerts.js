@@ -1,10 +1,10 @@
-import { cleanProfile, day, gapToLiquidation, portfolioBrief, positionChanges, walletName } from "./analytics.js";
+import { cleanProfile, day, gapToLiquidation, latestEquitySample, positionChanges, positionLeverage, walletName } from "./analytics.js";
 import { parsePortfolio, parsePositions } from "./market.js";
 import { hyperliquidInfo } from "./hyperliquid.js";
-import { accountEquityNotice, planEquityChange, readEquityChangeBaseline } from "./equity-change-alerts.js";
+import { accountEquityNotice, equitySampleFreshness, planEquityChange, planEquityVolatility, readEquityChangeBaseline } from "./equity-change-alerts.js";
 import { saveAlertHealth, savePushHealth } from "./alert-health.js";
 import { sendPush } from "./push.js";
-import { formatFillNotification } from "./notification-format.js";
+import { formatEquityReason, formatFillNotification, formatLeverageNotification } from "./notification-format.js";
 
 export const alertCheckMinutes = 60;
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
@@ -84,26 +84,51 @@ async function trackEquityPeak(db, user, address, trackingId, equity, now, state
   return equity;
 }
 
+async function readAllPositions(address) {
+  const registry = await hyperliquidInfo({ type: "perpDexs" }, true);
+  if (!Array.isArray(registry) || registry[0] !== null ||
+      !registry.every(dex => dex === null || (typeof dex?.name === "string" && dex.name))) {
+    throw new Error("Invalid perpetual exchange list");
+  }
+  const markets = new Set(["", ...registry.filter(Boolean).map(dex => dex.name)]);
+  const states = await Promise.all([...markets].map(async dex => [dex,
+    await hyperliquidInfo({ type: "clearinghouseState", user: address, ...(dex ? { dex } : {}) }, true),
+  ]));
+  return parsePositions(states);
+}
+
 async function watchRisk(db, user, wallet, rules, now) {
   const target = "risk:" + wallet.address;
   const prior = await db.prepare("SELECT breached FROM alert_status WHERE user_id = ? AND target = ?").bind(user, target).first();
   const old = new Set(JSON.parse(prior?.breached ?? "[]"));
   const next = new Set(old);
-  const [equityResult, positionResult] = await Promise.allSettled([
-    rules.equity || rules.equityChangeAlert ? hyperliquidInfo({ type: "portfolio", user: wallet.address }, true).then(parsePortfolio) : Promise.resolve(null),
+  const needsEquity = rules.equity || rules.equityChangeAlert || rules.equityVolatility || rules.leverageAlert;
+  const [equityResult, positionResult, leverageResult] = await Promise.allSettled([
+    needsEquity ? hyperliquidInfo({ type: "portfolio", user: wallet.address }, true).then(parsePortfolio) : Promise.resolve(null),
     rules.loss || rules.gap ? hyperliquidInfo({ type: "clearinghouseState", user: wallet.address }, true).then(raw => parsePositions([["", raw]])) : Promise.resolve([]),
+    rules.leverageAlert ? readAllPositions(wallet.address) : Promise.resolve(null),
   ]);
   const observations = [];
   const statements = [];
   const equityReasons = [];
-  let equity = null;
+  const sample = latestEquitySample(equityResult.value);
+  const equity = sample?.[1] ?? null;
+  let swing = null;
   const percentMode = rules.equityMode === "percent" && rules.equity;
   const percentKey = "equity-percent:" + (rules.equityTrackingId ?? "initial");
+  const leverageKey = "leverage:" + rules.leverageAlert;
   for (const key of old) {
     if ((key === "equity" && percentMode) || (key.startsWith("equity-percent:") && (!percentMode || key !== percentKey))) next.delete(key);
+    if (key.startsWith("leverage:") && (!rules.leverageAlert || key !== leverageKey)) next.delete(key);
   }
   if (equityResult.status === "fulfilled") {
-    equity = portfolioBrief(equityResult.value).equity;
+    if (rules.equityVolatility) {
+      const movement = await planEquityVolatility(db, user, wallet.address, rules.equityVolatility, now, sample);
+      if (movement) {
+        statements.push(movement.statement);
+        swing = movement.swing;
+      }
+    }
     if (Number.isFinite(equity) && rules.equityChangeAlert) {
       const change = await planEquityChange(db, user, wallet.address, rules.equityChangeAlert, now, equity);
       if (change) {
@@ -116,10 +141,10 @@ async function watchRisk(db, user, wallet, rules, now) {
       if (peak !== null) {
         const drop = (peak - equity) / peak * 100;
         observations.push([percentKey, drop >= rules.equity,
-          "较最高点回落 " + drop.toFixed(2) + "%（提醒线 " + money.format(peak * (1 - rules.equity / 100)) + "）"]);
+          formatEquityReason("percent", drop, peak * (1 - rules.equity / 100))]);
       }
     } else if (!percentMode && (equity !== null || !rules.equity)) {
-      observations.push(["equity", rules.equity && equity <= rules.equity, "低于固定线 " + money.format(rules.equity ?? 0)]);
+      observations.push(["equity", rules.equity && equity <= rules.equity, formatEquityReason("amount", null, rules.equity)]);
     }
   }
   if (positionResult.status === "fulfilled") {
@@ -148,14 +173,29 @@ async function watchRisk(db, user, wallet, rules, now) {
       }
     }
   }
-  if (equityReasons.length) {
-    const notice = await accountEquityNotice(wallet.address, equityResult.value, now, equity, equityReasons);
+  const perps = leverageResult.value;
+  if (perps?.every(row => row.value !== null) && sample && sample[0] >= now - equitySampleFreshness) {
+    const notional = perps.reduce((total, row) => total + row.value, 0);
+    const leverage = positionLeverage(notional, equity);
+    if (leverage !== null) {
+      if (leverage <= rules.leverageAlert) next.delete(leverageKey);
+      else {
+        next.add(leverageKey);
+        if (!old.has(leverageKey)) {
+          const notice = formatLeverageNotification(leverage, rules.leverageAlert, notional, equity);
+          statements.push(alertInsert(db, user, "leverage:" + wallet.address + ":" + now, notice.body, now, notice.title));
+        }
+      }
+    }
+  }
+  if (swing || equityReasons.length) {
+    const notice = await accountEquityNotice(wallet.address, equityResult.value, now, equity, equityReasons, swing);
     statements.push(alertInsert(db, user, "equity:" + wallet.address + ":" + now, notice.body, now, notice.title));
   }
   statements.push(db.prepare("INSERT INTO alert_status VALUES (?, ?, ?, ?) ON CONFLICT(user_id, target) DO UPDATE SET cursor = excluded.cursor, breached = excluded.breached")
     .bind(user, target, now, JSON.stringify([...next])));
   await db.batch(statements);
-  return equityResult.status === "rejected" || positionResult.status === "rejected" ? "partial" : "ok";
+  return [equityResult, positionResult, leverageResult].some(result => result.status === "rejected") ? "partial" : "ok";
 }
 
 async function deliver(env, user, now) {
@@ -233,7 +273,9 @@ async function checkProfile(env, profile, now, background) {
     const targets = wallets.filter(wallet => wallet.notify && rules.actions.length);
     const mine = wallets.find(wallet => wallet.role === "mine");
     const jobs = targets.map(wallet => watchFills(env.DB, user, wallet, rules, now));
-    if (mine && (rules.equity || rules.loss || rules.gap || rules.equityChangeAlert)) jobs.push(watchRisk(env.DB, user, mine, rules, now));
+    if (mine && (rules.equity || rules.loss || rules.gap || rules.equityChangeAlert || rules.equityVolatility || rules.leverageAlert)) {
+      jobs.push(watchRisk(env.DB, user, mine, rules, now));
+    }
     const outcomes = await Promise.allSettled(jobs);
     const failures = outcomes.filter(result => result.status === "rejected" || result.value === "partial").length;
     if (background) await saveAlertHealth(env.DB, user, "cloud-scan-health", { checked: outcomes.length, failures });

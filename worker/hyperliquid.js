@@ -8,7 +8,8 @@ const snapshotLimit = 128;
 // of the app's budget for alert scans before admitting interactive queries.
 const budget = 1_000;
 const interactiveBudget = 720;
-const weightByType = { clearinghouseState: 2, spotClearinghouseState: 2, portfolio: 20 };
+const weightByType = { clearinghouseState: 2, spotClearinghouseState: 2, portfolio: 20, perpDexs: 20 };
+const dexListTtl = 5 * minute;
 const calls = [];
 const cached = new Map();
 const pending = new Map();
@@ -79,7 +80,7 @@ export async function hyperliquidInfo(payload, priority = false) {
     if (snapshot) {
       cached.delete(key);
       if (cached.size >= snapshotLimit) cached.delete(cached.keys().next().value);
-      cached.set(key, { data, expires: Date.now() + snapshotTtl });
+      cached.set(key, { data, expires: Date.now() + (payload.type === "perpDexs" ? dexListTtl : snapshotTtl) });
     }
     return data;
   }).finally(() => pending.delete(key));

@@ -1,10 +1,12 @@
-import { addressOf, cleanEquityChangeAlert, cleanNotificationFields, walletName } from "./analytics.js";
+import { addressOf, cleanEquityChangeAlert, cleanEquityVolatility, cleanLeverageAlert, cleanNotificationFields,
+  equityVolatilityDefaults, leverageAlertDefault, numberOf, positionLeverage, walletName } from "./analytics.js";
 
 const quantity = new Intl.NumberFormat("en-US", { maximumFractionDigits: 3 });
 const price = new Intl.NumberFormat("en-US", { maximumSignificantDigits: 10 });
 const currency = new Intl.NumberFormat("en-US", {
   style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2,
 });
+const signedCurrency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", signDisplay: "exceptZero" });
 const realized = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2, maximumFractionDigits: 8, signDisplay: "exceptZero",
 });
@@ -47,22 +49,73 @@ const sampleFill = {
   coin: "NVDA", action: "reduce", start: 3.192, end: 2.431, size: 0.761, price: 160.05, closedPnl: -25.5,
 };
 
-export function formatEquityChangeNotification(from, to, change) {
-  const up = change > 0;
+export function formatEquityReason(type, value, level) {
+  if (type === "amount") return "低于固定线 " + currency.format(level);
+  const prefix = { up: "较上次基准上涨 ", down: "较上次基准下跌 ", percent: "较最高点回落 " };
+  const change = prefix[type] + Math.abs(value).toFixed(2) + "%";
+  return type === "percent" ? change + "（提醒线 " + currency.format(level) + "）" : change;
+}
+
+export function formatEquityNotification({ current, dayEquity, approximate = false, reasons, swing, deposited = 0, withdrawn = 0 }) {
+  const hasToday = Number.isFinite(dayEquity) && dayEquity > 0;
+  const delta = current - dayEquity;
+  const change = hasToday ? 100 * (delta / dayEquity) : 0;
+  const marker = change > 0 ? "📈 " : change < 0 ? "📉 " : "";
+  const dayLabel = (change > 0 ? "+" : "") + change.toFixed(2) + "%";
+  const title = swing ? (swing.change > 0 ? "📈" : "📉") + " 权益波动 · " +
+    swing.minutes + " 分钟 " + (swing.change > 0 ? "+" : "") + swing.change.toFixed(2) + "%"
+    : marker + (hasToday ? "账户权益 · 今日 " + dayLabel : "账户权益提醒");
+  const timing = approximate ? "UTC+8 零点附近样本" : "UTC+8 零点";
+  const lines = swing
+    ? [hasToday ? "今日 " + dayLabel + "（" + signedCurrency.format(delta) + "）" : "今日样本不足",
+      "当前权益 " + currency.format(current)]
+    : [hasToday ? timing + "起 " + signedCurrency.format(delta) + "，当前 " + currency.format(current)
+      : "当前权益 " + currency.format(current) + "，今日样本不足"];
+  if (reasons.length) lines.push("触发：" + reasons.join("；"));
+  if (deposited || withdrawn) {
+    lines.push([deposited && "今日入金 " + signedCurrency.format(deposited),
+      withdrawn && "今日出金 " + signedCurrency.format(-withdrawn)].filter(Boolean).join(" · "));
+  }
+  return { title, body: lines.join("\n") };
+}
+
+export function formatLeverageNotification(ratio, threshold, notional, equity) {
+  const rounded = ratio.toFixed(2);
   return {
-    title: (up ? "📈 账户权益上涨 " : "📉 账户权益下跌 ") + Math.abs(change).toFixed(2) + "%",
-    body: (up ? "增加 " : "减少 ") + currency.format(Math.abs(to - from)) +
-      "\n" + currency.format(from) + " → " + currency.format(to),
+    title: Number(rounded) > threshold ? "⚠️ 总杠杆率 · " + rounded + "×" : "⚠️ 总杠杆率超限",
+    body: "超过提醒线 " + threshold + "×\n名义仓位 " + currency.format(notional) + "\n账户权益 " + currency.format(equity),
   };
 }
 
-
 export function formatNotificationPreview(options = {}) {
-  const { type, name, notificationFields, up, down } = options ?? {};
+  const { type, name, notificationFields, up, down, downsideMode, amount, peakDrop, volatility, leverage } = options ?? {};
+  if (type === "volatility") {
+    const config = cleanEquityVolatility(volatility) ?? equityVolatilityDefaults;
+    const current = 1000 * (1 + config.threshold / 100);
+    return formatEquityNotification({
+      current, dayEquity: 980, swing: { minutes: config.minutes, change: config.threshold }, reasons: [],
+    });
+  }
+  if (type === "leverage") {
+    const threshold = cleanLeverageAlert(leverage) ?? leverageAlertDefault;
+    const equity = 1000;
+    const notional = equity * (threshold + 0.25);
+    return formatLeverageNotification(positionLeverage(notional, equity), threshold, notional, equity);
+  }
   if (type === "up" || type === "down") {
     const rule = cleanEquityChangeAlert({ up, down });
-    const change = type === "up" ? rule?.up ?? 5 : -(rule?.down ?? 5);
-    return formatEquityChangeNotification(1000, 1000 + 10 * change, change);
+    const upSample = type === "up";
+    const mode = upSample ? "up" : downsideMode === "amount" || downsideMode === "percent" ? downsideMode : "down";
+    const drop = numberOf(peakDrop);
+    const change = upSample ? rule?.up ?? 5 : mode === "percent" ? (drop > 0 && drop <= 100 ? drop : 5) : rule?.down ?? 5;
+    const base = 1000;
+    const floor = numberOf(amount);
+    const current = mode === "amount" ? (floor > 0 && floor <= 1e12 ? floor : 950) :
+      base * (1 + (upSample ? change : -change) / 100);
+    const dayEquity = mode === "amount" ? current / 0.93 : upSample ? 980 : 1020;
+    return formatEquityNotification({
+      current, dayEquity, reasons: [formatEquityReason(mode, change, current)],
+    });
   }
   const sampleName = typeof name === "string" ? name.trim().slice(0, 28) : "";
   return formatFillNotification({ name: sampleName || "示例钱包" }, sampleFill, notificationFields);

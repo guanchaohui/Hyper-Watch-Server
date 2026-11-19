@@ -1,4 +1,5 @@
-import { addressOf, actionLabels, cashMovements, cleanEquityChangeAlert, cleanProfile, day, metricsFor, notificationFieldLabels, portfolioBrief, positionChanges, walletLimit, walletName } from "./analytics.js";
+import { addressOf, actionLabels, cashMovements, cleanEquityChangeAlert, cleanProfile, day, equityVolatilityDefaults,
+  leverageAlertDefault, metricsFor, notificationFieldLabels, portfolioBrief, positionChanges, walletLimit, walletName } from "./analytics.js";
 import { formatNotificationPreview } from "./notification-format.js";
 import { info, parsePortfolio, parsePositions } from "./market.js";
 
@@ -357,11 +358,17 @@ export function setupWorkspace(ui) {
 
   function readEquityChangeRule() {
     return cleanEquityChangeAlert({
-      up: $("equity-change-up").value, down: $("equity-change-down").value,
+      up: $("equity-change-up").value,
+      down: $("rule-equity-downside").value === "rolling" ? $("equity-change-down").value : null,
     });
   }
 
   let previewWalletName = ui.load("notification-preview-wallet", "示例钱包");
+  let previewType = "trade";
+  const downsideModes = { off: "关闭", rolling: "从上次提醒基准下跌", percent: "从最高权益回落", amount: "降至固定金额" };
+  const downsideInputIds = { rolling: "equity-change-down", percent: "rule-equity-percent", amount: "rule-equity" };
+
+  const volatilityFields = () => ({ minutes: $("volatility-minutes").value, threshold: $("volatility-threshold").value });
 
   function notificationPreviewSettings() {
     return {
@@ -370,6 +377,11 @@ export function setupWorkspace(ui) {
       notificationFields: selectedNotificationFields(),
       up: $("equity-change-up").value,
       down: $("equity-change-down").value,
+      downsideMode: $("rule-equity-downside").value,
+      amount: $("rule-equity").value,
+      peakDrop: $("rule-equity-percent").value,
+      volatility: volatilityFields(),
+      leverage: $("leverage-threshold").value,
     };
   }
 
@@ -385,33 +397,49 @@ export function setupWorkspace(ui) {
   function alertPage() {
     const rule = profile.rules;
     const equityChangeRule = rule.equityChangeAlert;
+    const volatility = rule.equityVolatility ?? equityVolatilityDefaults;
+    const downsideMode = rule.equity ? rule.equityMode : equityChangeRule?.down ? "rolling" : "off";
     viewRoot.innerHTML = titled("提醒设置", "设置仓位变动、账户权益涨跌幅和我的钱包阈值。") +
       panel('<h2>仓位变动</h2><div class="rule-actions">' +
         Object.entries(actionLabels).map(([key, label]) => check("rule-action", key, rule.actions.includes(key), label)).join("") +
         '</div><p class="hint">钱包列表中勾选「接收这个钱包的仓位变动」后适用。</p><h2>交易通知内容</h2><div class="rule-actions">' +
         Object.entries(notificationFieldLabels).map(([key, label]) => check("notification-field", key, rule.notificationFields.includes(key), label)).join("") +
-        '</div><p class="hint">可只保留标题。已实现盈亏只在减仓、平仓或反手时显示。可把当前预览发送到已开启通知的本机。</p>' +
-        '<div class="notification-preview">' + field("通知预览", '<select id="notification-preview-type"><option value="trade">交易通知</option>' +
-          '<option value="up">上涨提醒</option><option value="down">下跌提醒</option></select>') +
+        '</div><p class="hint">可只保留标题。已实现盈亏只在减仓、平仓或反手时显示。</p>' +
+        '<div class="notification-preview"><h3>通知预览</h3>' + field("预览类型", '<select id="notification-preview-type">' +
+          choose("trade", previewType, "交易通知") + choose("up", previewType, "权益上涨提醒") +
+          choose("down", previewType, "权益下跌提醒") + choose("volatility", previewType, "权益短时波动") +
+          choose("leverage", previewType, "总杠杆超限") + '</select>') +
         '<div id="preview-wallet-field">' + field("预览钱包名称", '<input id="preview-wallet-name" maxlength="28" value="' +
           esc(previewWalletName) + '" placeholder="示例钱包">') + '</div>' +
-        '<strong id="notification-preview-title"></strong><p id="notification-preview-body"></p>' +
+        '<div class="notification-preview-content" aria-live="polite">' +
+          '<strong id="notification-preview-title"></strong><p id="notification-preview-body"></p></div>' +
+        '<p class="hint">预览使用示例数据。发送前，请先开启本机通知。</p>' +
         '<div class="notification-preview-actions">' + button("push-preview", "发送当前预览") +
         '<span id="push-preview-feedback" class="status-inline" role="status"></span></div></div>' +
-        '<h2>我的账户权益提醒</h2><h3 class="equity-rule-heading">从上次基准涨跌</h3><div class="rule-thresholds">' +
+        '<h2>我的账户权益提醒</h2><p class="hint">监控「我的钱包」的账户总权益。今日涨跌幅按 UTC+8 零点起算。</p>' +
+        '<div class="rule-thresholds">' +
         field("上涨达到（%）", '<input type="number" min="0.01" max="100" step="any" id="equity-change-up" value="' + esc(equityChangeRule?.up ?? "") + '">') +
-        field("下跌达到（%）", '<input type="number" min="0.01" max="100" step="any" id="equity-change-down" value="' + esc(equityChangeRule?.down ?? "") + '">') + '</div>' +
-        '<p class="hint">监控「我的钱包」的账户总权益。以启用后首次读到的权益为基准，触发后用当时的权益作为新基准。留空关闭对应方向。</p>' +
-        '<p id="equity-change-levels" class="hint" aria-live="polite"></p>' +
-        '<h3 class="equity-rule-heading">低于固定金额或从最高点回落</h3><div class="rule-thresholds">' +
-        field("账户权益提醒方式", '<select id="rule-equity-mode">' +
-          choose("amount", rule.equityMode, "固定金额") + choose("percent", rule.equityMode, "从最高点回落") + '</select>') +
-        '<div id="rule-equity-amount-field"' + (rule.equityMode === "percent" ? " hidden" : "") + '>' +
+        field("下跌提醒方式", '<select id="rule-equity-downside">' +
+          Object.entries(downsideModes).map(([mode, label]) => choose(mode, downsideMode, label)).join("") + '</select>') +
+        '<div id="rule-equity-rolling-field"' + (downsideMode === "rolling" ? "" : " hidden") + '>' +
+          field("下跌达到（%）", '<input type="number" min="0.01" max="100" step="any" id="equity-change-down" value="' + esc(equityChangeRule?.down ?? "") + '">') +
+        '</div><div id="rule-equity-amount-field"' + (downsideMode === "amount" ? "" : " hidden") + '>' +
           field("权益降到（USD）", '<input type="number" min="0.01" max="1000000000000" step="any" id="rule-equity" value="' + esc(rule.equityMode === "amount" ? rule.equity ?? "" : "") + '">') +
-        '</div><div id="rule-equity-percent-field"' + (rule.equityMode === "amount" ? " hidden" : "") + '>' +
-          field("从最高点下跌（%）", '<input type="number" min="0.01" max="100" step="any" id="rule-equity-percent" value="' + esc(rule.equityMode === "percent" ? rule.equity ?? "" : "") + '">') +
+        '</div><div id="rule-equity-percent-field"' + (downsideMode === "percent" ? "" : " hidden") + '>' +
+          field("从最高权益回落（%）", '<input type="number" min="0.01" max="100" step="any" id="rule-equity-percent" value="' + esc(rule.equityMode === "percent" ? rule.equity ?? "" : "") + '">') +
         '</div>' +
-        '</div><p id="equity-floor-levels" class="hint" aria-live="polite"></p>' +
+        '</div><p class="hint">上涨留空关闭。按上次提醒基准计算的规则，会在触发后更新基准。</p>' +
+        '<p id="equity-alert-levels" class="hint" aria-live="polite"></p>' +
+        '<h2>权益短时波动</h2><div class="rule-actions">' +
+        check("enable-volatility", "on", Boolean(rule.equityVolatility), "启用短时波动提醒") + '</div><div class="rule-thresholds">' +
+        field("观察窗口（分钟）", '<input id="volatility-minutes" type="number" min="5" max="120" step="1" required value="' + esc(volatility.minutes) + '">') +
+        field("涨跌达到（%）", '<input id="volatility-threshold" type="number" min="0.01" max="100" step="any" required value="' + esc(volatility.threshold) + '">') +
+        '</div><p class="hint">监控「我的钱包」的总权益，上涨和下跌使用同一阈值。开启后，先积累一个观察窗口的数据。</p>' +
+        '<h2>总杠杆提醒</h2><div class="rule-actions">' +
+        check("enable-leverage", "on", Boolean(rule.leverageAlert), "启用总杠杆提醒") + '</div><div class="rule-thresholds">' +
+        field("超过（倍）", '<input id="leverage-threshold" type="number" min="0.01" max="1000" step="any" required value="' +
+          esc(rule.leverageAlert ?? leverageAlertDefault) + '">') +
+        '</div><p class="hint">多仓和空仓的名义价值加总，再除以账户总权益。</p>' +
         '<h2>其他仓位提醒</h2><div class="rule-thresholds">' +
         field("合约净浮亏达到（USD）", '<input type="number" min="0.01" max="1000000000000" step="any" id="rule-loss" value="' + esc(rule.loss ?? "") + '">') +
         field("距离强平还剩（%）", '<input type="number" min="0.01" max="100" step="any" id="rule-gap" value="' + esc(rule.gap ?? "") + '">') + '</div>' +
@@ -429,28 +457,33 @@ export function setupWorkspace(ui) {
   }
 
   async function refreshEquityLevels() {
-    const change = $("equity-change-levels");
-    const floor = $("equity-floor-levels");
-    if (!siteRuntime || !change || !floor) return;
+    const note = $("equity-alert-levels");
+    if (!siteRuntime || !note) return;
     try {
       const levels = await request("/api/equity-alert-levels");
-      if (!change.isConnected || !floor.isConnected) return;
+      if (!note.isConnected) return;
       if (!levels.hasWallet) {
-        change.textContent = "先在「钱包」设置我的钱包。";
-        floor.textContent = "";
+        note.textContent = "先在「钱包」设置我的钱包。";
         return;
       }
-      const rolling = levels.change;
-      change.textContent = !rolling ? "已保存规则：关闭" : rolling.baseline === null ? "已保存规则：等待云端读取基准" :
-        ["当前基准 " + money(rolling.baseline),
-          rolling.up !== null && "上涨提醒线 " + money(rolling.up),
-          rolling.down !== null && "下跌提醒线 " + money(rolling.down)].filter(Boolean).join(" · ");
-      const bound = levels.floor;
-      floor.textContent = !bound ? "已保存规则：关闭" : !bound.peakMode ? "固定提醒线 " + money(bound.down)
-        : bound.peak === null ? "已保存规则：等待云端记录最高权益"
-        : "追踪最高权益 " + money(bound.peak) + " · 下跌提醒线 " + money(bound.down);
+      const { change, floor } = levels;
+      if (!change && !floor) { note.textContent = "已保存的基准涨跌和下跌提醒已关闭。"; return; }
+      const lines = [];
+      if (change) {
+        if (change.baseline === null) lines.push("等待云端记录基准");
+        else {
+          lines.push("当前基准 " + money(change.baseline));
+          if (change.up !== null) lines.push("上涨提醒线 " + money(change.up));
+          if (change.down !== null) lines.push("下跌提醒线 " + money(change.down));
+        }
+      }
+      if (floor) {
+        if (floor.peakMode) lines.push(floor.peak === null ? "等待云端记录最高权益" : "最高权益 " + money(floor.peak));
+        if (floor.down !== null) lines.push("下跌提醒线 " + money(floor.down));
+      }
+      note.textContent = lines.join(" · ");
     } catch {
-      if (change.isConnected) change.textContent = "暂时无法读取已保存规则的基准。";
+      if (note.isConnected) note.textContent = "暂时无法读取已保存规则的基准。";
     }
   }
 
@@ -655,9 +688,15 @@ export function setupWorkspace(ui) {
       case "push-test": devicePush("test"); break;
       case "push-preview": devicePush("preview"); break;
       case "save-rules": {
-        const equityMode = $("rule-equity-mode").value;
-        const equityInput = $(equityMode === "percent" ? "rule-equity-percent" : "rule-equity");
-        if (![equityInput, $("rule-loss"), $("rule-gap"), $("equity-change-up"), $("equity-change-down")].every(input => input.reportValidity())) break;
+        const downsideMode = $("rule-equity-downside").value;
+        const equityMode = downsideMode === "percent" ? "percent" : "amount";
+        const downsideInput = $(downsideInputIds[downsideMode]);
+        const volatilityEnabled = viewRoot.querySelector('[name="enable-volatility"]').checked;
+        const leverageEnabled = viewRoot.querySelector('[name="enable-leverage"]').checked;
+        const inputs = [$("rule-loss"), $("rule-gap"), $("equity-change-up"), downsideInput];
+        if (volatilityEnabled) inputs.push($("volatility-minutes"), $("volatility-threshold"));
+        if (leverageEnabled) inputs.push($("leverage-threshold"));
+        if (!inputs.filter(Boolean).every(input => input.reportValidity())) break;
         const equityChangeAlert = readEquityChangeRule();
         if (equityChangeAlert) {
           const previous = profile.rules.equityChangeAlert;
@@ -667,7 +706,9 @@ export function setupWorkspace(ui) {
         update({ ...profile, rules: {
           actions: [...viewRoot.querySelectorAll('[name="rule-action"]:checked')].map(item => item.value),
           notificationFields: selectedNotificationFields(), equityChangeAlert,
-          equityMode, equity: equityInput.value, equityTrackingId: profile.rules.equityTrackingId,
+          equityVolatility: volatilityEnabled ? volatilityFields() : null,
+          leverageAlert: leverageEnabled ? $("leverage-threshold").value : null,
+          equityMode, equity: downsideMode === "rolling" ? null : downsideInput?.value, equityTrackingId: profile.rules.equityTrackingId,
           loss: $("rule-loss").value, gap: $("rule-gap").value,
         } });
         break;
@@ -679,17 +720,19 @@ export function setupWorkspace(ui) {
       previewWalletName = target.value;
       ui.store("notification-preview-wallet", previewWalletName);
     }
-    if (["preview-wallet-name", "equity-change-up", "equity-change-down"].includes(target.id)) updateNotificationPreview();
+    if (["preview-wallet-name", "equity-change-up", "volatility-minutes", "volatility-threshold",
+      "leverage-threshold", ...Object.values(downsideInputIds)].includes(target.id)) updateNotificationPreview();
   });
   viewRoot.addEventListener("change", ({ target }) => {
+    if (target.id === "notification-preview-type") previewType = target.value;
     if (target.name === "notification-field" || target.id === "notification-preview-type") {
       updateNotificationPreview();
       return;
     }
     switch (target.id) {
-      case "rule-equity-mode":
-        $("rule-equity-amount-field").hidden = target.value === "percent";
-        $("rule-equity-percent-field").hidden = target.value !== "percent";
+      case "rule-equity-downside":
+        for (const mode of Object.keys(downsideInputIds)) $("rule-equity-" + mode + "-field").hidden = target.value !== mode;
+        updateNotificationPreview();
         return;
       case "wallet-group-filter": watchGroup = target.value; break;
       case "activity-wallet": activityAddress = target.value; break;
@@ -713,9 +756,9 @@ export function setupWorkspace(ui) {
   let checkingAlerts = false;
   async function checkWhileOpen() {
     if (!siteRuntime || document.hidden || dirty || checkingAlerts) return;
-    const { actions, equity, loss, gap, equityChangeAlert } = profile.rules;
+    const { actions, equity, loss, gap, equityChangeAlert, equityVolatility, leverageAlert } = profile.rules;
     const applies = (actions.length && profile.wallets.some(wallet => wallet.notify)) ||
-      (own() && (equity || loss || gap || equityChangeAlert));
+      (own() && (equity || loss || gap || equityChangeAlert || equityVolatility || leverageAlert));
     if (!applies) return;
     checkingAlerts = true;
     try {

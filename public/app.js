@@ -1,6 +1,6 @@
 import { createChart } from "./chart.js";
 import { setupWorkspace } from "./workspace.js";
-import { gapToLiquidation, periodPnl, portfolioBrief, portfolioPeriodPoints } from "./analytics.js";
+import { gapToLiquidation, periodPnl, portfolioBrief, portfolioPeriodPoints, positionLeverage } from "./analytics.js";
 import { addressOf, connectPerps, demoData, info, parsePortfolio, parsePositions, parseSpot } from "./market.js";
 
 const $ = id => document.getElementById(id);
@@ -232,8 +232,8 @@ function sideCell(row) {
 }
 
 function leverage(value, equity) {
-  if (!(equity > 0) || !Number.isFinite(value)) return "—";
-  return masked ? mask : (value / equity).toFixed(2) + "×";
+  const ratio = positionLeverage(value, equity);
+  return ratio === null ? "—" : masked ? mask : ratio.toFixed(2) + "×";
 }
 
 function positionRisk(row, equity) {

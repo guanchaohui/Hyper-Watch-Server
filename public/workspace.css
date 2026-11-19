@@ -114,9 +114,9 @@
 }
 
 .notification-preview { margin: 10px 0 16px; padding: 10px 12px; background: var(--panel-raised); border: 1px solid var(--line); border-radius: 10px; }
+.notification-preview h3 { margin: 0 0 8px; font-size: 15px; }
 .notification-preview .field { max-width: 190px; margin-bottom: 8px; }
-.notification-preview p { white-space: pre-wrap; color: var(--muted); overflow-wrap: anywhere; margin-top: 2px; }
-
-.equity-rule-heading { margin: 12px 0 0; color: var(--text); font-size: 13px; }
+.notification-preview-content { padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.notification-preview-content p { white-space: pre-wrap; color: var(--muted); overflow-wrap: anywhere; margin: 4px 0 0; }
 
 .notification-preview-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 9px; }
