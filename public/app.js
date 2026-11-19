@@ -1,3 +1,5 @@
+import { formatMoney } from "./format-values.js";
+import { movedPositionOrder, orderPositions, positionKey, setupCardOrdering } from "./position-order.js";
 import { createChart } from "./chart.js";
 import { setupWorkspace } from "./workspace.js";
 import { filterPositions, periodPnl, portfolioBrief, portfolioPeriodPoints, positionLeverage,
@@ -10,6 +12,7 @@ const icons = {
   records: '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6m-6 4h6m-6 4h4"/>',
   bell: '<path d="M18 8a6 6 0 0 0-12 0v5l-2 3h16l-2-3V8m-8 11a2 2 0 0 0 4 0"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  grip: '<circle cx="9" cy="5" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="19" r="1"/>',
   wallet: '<path d="M4 6h14a2 2 0 0 1 2 2v2m0 5v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a3 3 0 0 1 3-3h11"/><path d="M22 10h-5a2.5 2.5 0 0 0 0 5h5z"/><path d="M17.5 12.5h.01"/>',
   chevron: '<path d="m6 9 6 6 6-6"/>',
   refresh: '<path d="M20 8a8 8 0 0 0-13.4-3.5L4 7m0-4v4h4m-4 9a8 8 0 0 0 13.4 3.5L20 17m0 4v-4h-4"/>',
@@ -29,9 +32,6 @@ function setIcon(node, name) {
 }
 for (const node of document.querySelectorAll("[data-icon]")) setIcon(node, node.dataset.icon);
 
-const cash = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
-const tinyCash = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 8 });
-const compact = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 2 });
 const qty = new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 });
 const time = new Intl.DateTimeFormat("zh-CN", {
   month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false,
@@ -70,6 +70,7 @@ const savedPnlRange = loadPreference("overview-period", legacyRange === "day" ? 
 pnlSummarySelect.value = ["day", "week", "month", "allTime"].includes(savedPnlRange) ? savedPnlRange : "today";
 const positionSort = $("position-sort");
 const positionLayout = $("position-layout");
+const cardMedia = matchMedia("(max-width: 780px), (display-mode: standalone) and (max-width: 980px)");
 positionSort.value = loadPreference("position-sort", "notional");
 if (!positionSort.value) positionSort.value = "notional";
 positionLayout.value = loadPreference("position-layout", "auto");
@@ -79,13 +80,9 @@ let series = "equity";
 let tab = "positions";
 let session;
 
-function amount(number, options = {}) {
-  if (number === null || number === undefined) return "—";
-  if (masked) return mask;
-  const plus = options.signed && number > 0 ? "+" : "";
-  const format = options.compact && Math.abs(number) >= 10000 ? compact
-    : Math.abs(number) > 0 && Math.abs(number) < .01 ? tinyCash : cash;
-  return plus + format.format(number);
+function amount(value, options) {
+  const display = formatMoney(value, options);
+  return masked && display !== "—" ? mask : display;
 }
 
 function quantity(number) {
@@ -240,7 +237,6 @@ function renderRealized() {
     activityError || status === "unavailable" ? "等待成交同步" : "UTC+8 · 等待成交数据";
 }
 
-const positionKey = row => JSON.stringify([row.dex, row.coin]);
 function renderRiskCockpit() {
   const s = session;
   const observed = s.times.get("positions");
@@ -363,10 +359,7 @@ function leverage(value, equity) {
 }
 
 function holdingPrice(value) {
-  const price = Number(value);
-  if (!Number.isFinite(price) || price <= 0) return "—";
-  if (masked) return mask;
-  return price < 0.005 ? "<$0.01" : cash.format(price);
+  return Number(value) > 0 ? amount(value) : "—";
 }
 
 function positionPnl(row) {
@@ -386,9 +379,89 @@ function addHoldingField(fields, label, value) {
   fields.append(field);
 }
 
+const orderPreference = s => "position-order:" + (s.user || "demo");
+
+function moveHolding(source, target, after) {
+  const key = orderPreference(session);
+  const saved = loadPreference(key, []);
+  const sorted = filterPositions(session.positions ?? [], { sort: positionSort.value });
+  const current = positionSort.value === "manual" ? orderPositions(sorted, saved) : sorted;
+  const next = movedPositionOrder(current, saved, source, target, after);
+  if (next) {
+    savePreference(key, next);
+    positionSort.value = "manual";
+    savePreference("position-sort", "manual");
+    const row = current.find(item => positionKey(item) === source);
+    $("position-order-status").textContent = row.coin + " 已移到第 " + (next.indexOf(source) + 1) + " 位";
+  }
+  renderHoldings();
+}
+
+function holdingTable(columns, spot) {
+  const table = element("table", spot ? "holdings-table" : "holdings-table contract-holdings");
+  const heading = table.createTHead().insertRow();
+  for (const label of columns) {
+    const th = element("th", "", label);
+    th.scope = "col";
+    heading.append(th);
+  }
+  return table;
+}
+
+function appendHoldingRow(table, row, values, details) {
+  const tr = table.insertRow();
+  tr.insertCell().append(coinCell(row.coin, row.dex));
+  if (details) tr.insertCell().append(sideCell(row));
+  for (const value of values) tr.insertCell().textContent = value;
+  if (!details) return;
+  tr.insertCell().append(positionPnl(row));
+  tr.dataset.position = positionKey(row);
+  tr.tabIndex = -1;
+  const risk = table.insertRow();
+  risk.className = "position-risk-row";
+  const cell = risk.insertCell();
+  cell.colSpan = tr.cells.length;
+  const fields = element("dl", "position-risk-fields");
+  fields.setAttribute("aria-label", row.coin + " 持仓风险");
+  for (const field of details) addHoldingField(fields, ...field);
+  cell.append(fields);
+}
+
+function appendHoldingCard(container, row, columns, values, details, movable) {
+  const card = element("article", "mobile-holding" + (details ? " position-card" : " spot"));
+  const top = element("div", "mobile-holding-top");
+  const coin = coinCell(row.coin, row.dex);
+  const fields = element("dl", details ? "position-card-fields" : "");
+  values.forEach((value, index) => addHoldingField(fields, columns[index + (details ? 2 : 1)], value));
+  if (details) {
+    card.dataset.position = positionKey(row);
+    card.tabIndex = -1;
+    const identity = element("div", "holding-card-identity");
+    identity.append(coin, sideCell(row));
+    if (movable) {
+      const grip = element("button", "position-grip");
+      grip.type = "button";
+      grip.dataset.positionGrip = "";
+      grip.title = "拖动排列，也可按方向键";
+      grip.setAttribute("aria-label", "调整 " + row.coin + " 卡片位置");
+      const icon = element("span", "icon");
+      icon.setAttribute("aria-hidden", "true");
+      setIcon(icon, "grip");
+      grip.append(icon);
+      top.append(grip);
+    }
+    top.append(identity, positionPnl(row));
+    for (const field of details) addHoldingField(fields, ...field);
+  } else top.append(coin);
+  card.append(top, fields);
+  container.append(card);
+}
+
 function renderHoldings() {
   const s = session;
   const body = $("holdings-body");
+  if (cardOrdering.active()) return;
+  const focusedGrip = document.activeElement.matches("[data-position-grip]");
   const focused = body.contains(document.activeElement) ? document.activeElement.closest("[data-position]")?.dataset.position : null;
   body.dataset.asOf = s.times.get("positions") ?? "";
   $("spot-count").textContent = s.spot?.length ?? "—";
@@ -397,7 +470,8 @@ function renderHoldings() {
   const query = $("position-search").value;
   const side = $("position-side").value;
   const filtered = query.trim() || side !== "all";
-  const list = spot || !raw ? raw : filterPositions(raw, { query, side, sort: positionSort.value });
+  const sorted = spot || !raw ? raw : filterPositions(raw, { query, side, sort: positionSort.value });
+  const list = !spot && sorted && positionSort.value === "manual" ? orderPositions(sorted, loadPreference(orderPreference(s), [])) : sorted;
   if (!spot) {
     const count = list ? (filtered ? list.length + " / " + raw.length : String(raw.length)) : "—";
     $("position-count").textContent = count;
@@ -406,7 +480,10 @@ function renderHoldings() {
   }
   $("position-search-clear").hidden = !query;
   $("holdings-tools").hidden = spot || (!raw?.length && !filtered);
-  body.dataset.layout = spot ? "auto" : positionLayout.value || "auto";
+  const preference = spot ? "auto" : positionLayout.value;
+  const cards = preference === "cards" || (preference !== "table" && cardMedia.matches);
+  body.dataset.layout = cards ? "cards" : "table";
+  $("position-order-hint").hidden = spot || !cards || (list?.length ?? 0) < 2;
 
   if (!list?.length) {
     const type = spot ? "现货余额" : "合约持仓";
@@ -421,70 +498,27 @@ function renderHoldings() {
   const columns = spot
     ? ["资产", "总数量", "占用数量"]
     : ["合约", "方向", "持仓数量", "开仓价", "标记价", "未实现盈亏"];
-  const table = element("table", spot ? "holdings-table" : "holdings-table contract-holdings");
-  const heading = table.createTHead().insertRow();
-  for (const label of columns) {
-    const th = element("th", "", label);
-    th.scope = "col";
-    heading.append(th);
-  }
-
-  const rows = table.createTBody();
-  const mobile = element("div", "mobile-holdings" + (spot ? "" : "contract-cards"));
+  const view = cards ? element("div", "mobile-holdings") : holdingTable(columns, spot);
+  if (!cards) view.createTBody();
   const equity = spot ? null : portfolioBrief(s.history).equity;
   for (const row of list) {
-    const fieldValues = spot
+    const values = spot
       ? [quantity(row.total), quantity(row.hold)]
       : [quantity(Math.abs(row.size)), holdingPrice(row.entry), holdingPrice(row.mark)];
-
-    const tr = rows.insertRow();
-    tr.insertCell().append(coinCell(row.coin, row.dex));
-    if (!spot) tr.insertCell().append(sideCell(row));
-    for (const value of fieldValues) tr.insertCell().textContent = value;
-    if (!spot) tr.insertCell().append(positionPnl(row));
-
-    const card = element("article", "mobile-holding" + (spot ? " spot" : " position-card"));
-    const top = element("div", "mobile-holding-top");
-    const coin = coinCell(row.coin, row.dex);
-    const fields = element("dl", spot ? "" : "position-card-fields");
-    fieldValues.forEach((value, index) => {
-      addHoldingField(fields, columns[index + (spot ? 1 : 2)], value);
-    });
-
-    if (spot) top.append(coin);
-    else {
-      tr.dataset.position = card.dataset.position = positionKey(row);
-      tr.tabIndex = card.tabIndex = -1;
-      const identity = element("div", "holding-card-identity");
-      identity.append(coin, sideCell(row));
-      top.append(identity, positionPnl(row));
-
-      const detail = rows.insertRow();
-      detail.className = "position-risk-row";
-      const cell = detail.insertCell();
-      cell.colSpan = columns.length;
-      const desktopFields = element("dl", "position-risk-fields");
-      desktopFields.setAttribute("aria-label", row.coin + " 持仓风险");
-      const details = [
-        ["预估强平价", holdingPrice(row.liquidationText)],
-        ["保证金占用", amount(row.margin)],
-        ["仓位杠杆率", leverage(row.value, equity)],
-      ];
-      for (const [label, value] of details) {
-        addHoldingField(fields, label, value);
-        addHoldingField(desktopFields, label, value);
-      }
-      cell.append(desktopFields);
-    }
-    card.append(top, fields);
-    mobile.append(card);
+    const details = spot ? null : [
+      ["预估强平价", holdingPrice(row.liquidationText)],
+      ["保证金占用", amount(row.margin)],
+      ["仓位杠杆率", leverage(row.value, equity)],
+    ];
+    if (cards) appendHoldingCard(view, row, columns, values, details, list.length > 1);
+    else appendHoldingRow(view.tBodies[0], row, values, details);
   }
-  body.replaceChildren(table, mobile);
+  body.replaceChildren(view);
   if (!spot) {
     body.append(element("p", "position-risk-note", "仓位杠杆率＝该仓位价值 ÷ 账户总权益。预估强平价来自 Hyperliquid。"));
     if (focused) {
       const target = [...body.querySelectorAll("[data-position]")].find(node => node.dataset.position === focused && node.getClientRects().length);
-      target?.focus({ preventScroll: true });
+      (focusedGrip ? target?.querySelector("[data-position-grip]") ?? target : target)?.focus({ preventScroll: true });
     }
     const row = s.focusCoin && list.find(row => row.coin === s.focusCoin);
     if (row && focusPosition(positionKey(row))) s.focusCoin = null;
@@ -592,6 +626,7 @@ async function refreshOverviewActivity(s) {
 }
 
 function openAccount(user, demo = false, focusCoin = null) {
+  cardOrdering.cancel();
   if (session) {
     session.controller.abort();
     session.disconnect?.();
@@ -651,7 +686,7 @@ function changeOverviewRange(value, persist = true) {
 
 registerChoice("periods", "period", changeOverviewRange);
 registerChoice("series", "series", value => { series = value; renderChart(); });
-registerChoice("holdings-tabs", "tab", value => { tab = value; renderHoldings(); renderConnection(); });
+registerChoice("holdings-tabs", "tab", value => { cardOrdering.cancel(); tab = value; renderHoldings(); renderConnection(); });
 function focusPosition(key) {
   const target = [...$("holdings-body").querySelectorAll("[data-position]")]
     .find(node => node.dataset.position === key && node.getClientRects().length);
@@ -661,16 +696,19 @@ function focusPosition(key) {
   return true;
 }
 
-$("position-search").addEventListener("input", renderHoldings);
+const cardOrdering = setupCardOrdering($("holdings-body"), moveHolding, renderHoldings);
+const refreshHoldings = () => { cardOrdering.cancel(); renderHoldings(); };
+cardMedia.addEventListener("change", refreshHoldings);
+$("position-search").addEventListener("input", refreshHoldings);
 $("position-search-clear").addEventListener("click", () => {
   const search = $("position-search");
   search.value = "";
   search.focus();
-  renderHoldings();
+  refreshHoldings();
 });
-$("position-side").addEventListener("change", renderHoldings);
+$("position-side").addEventListener("change", refreshHoldings);
 for (const control of [positionSort, positionLayout]) {
-  control.addEventListener("change", () => { savePreference(control.id, control.value); renderHoldings(); });
+  control.addEventListener("change", () => { savePreference(control.id, control.value); refreshHoldings(); });
 }
 
 const dialog = $("wallet-dialog");

@@ -1,3 +1,4 @@
+import { formatMoney } from "./format-values.js";
 import { addressOf, cleanEquityChangeAlert, cleanEquityVolatility, cleanLeverageAlert, cleanNotificationFields, cleanNotificationPositionUnit,
   equityVolatilityDefaults, leverageAlertDefault, numberOf, positionLeverage, walletName } from "./analytics.js";
 
@@ -7,9 +8,6 @@ const currency = new Intl.NumberFormat("en-US", {
   style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2,
 });
 const signedCurrency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", signDisplay: "exceptZero" });
-const realized = new Intl.NumberFormat("en-US", {
-  minimumFractionDigits: 2, maximumFractionDigits: 8, signDisplay: "exceptZero",
-});
 const verbs = { open: "开", add: "加", reduce: "减", close: "平", reverse: "反手做" };
 
 function formatQuantity(value) {
@@ -55,7 +53,7 @@ export function formatFillNotification(wallet, change, fields, positionUnit) {
     notional: "名义价值：" + formatNotional(notional),
     wallet: name.replace(/\s+/g, " ") || (address ? walletName({ address }) : "未命名钱包"),
     pnl: ["reduce", "close", "reverse"].includes(action)
-      ? "已实现盈亏：" + (Number.isFinite(closedPnl) ? realized.format(closedPnl) : "—") : "",
+      ? "已实现盈亏：" + (Number.isFinite(closedPnl) ? formatMoney(closedPnl, { symbol: "", signed: true }) : "—") : "",
   };
   const body = cleanNotificationFields(fields).map(field => lines[field]).filter(Boolean).join("\n");
   return { title, body };

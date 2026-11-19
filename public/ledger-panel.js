@@ -18,11 +18,15 @@ const time = value => Number.isFinite(value) && value > 0 ? clock.format(value) 
 
 export function renderLedger(view, result, { esc, table, tip, ui }) {
   const { coverage, rows } = result;
-  const money = value => value == null ? "—" : ui.amount(Number(value), { signed: true });
+  const money = value => ui.amount(value, { signed: true });
   const quantity = value => value == null || !Number.isFinite(Number(value)) ? "—" : ui.quantity(Number(value));
-  const qty = (value, token) => value == null ? "—" : quantity(value) + (token ? " " + token : "");
-  const tokens = entries => entries ? Object.entries(entries).map(([ticker, value]) => qty(value, ticker)).join(" / ") || "—" : "—";
-  const price = value => value == null ? "—" : "$" + quantity(value);
+  const tokenAmount = (value, token) => ui.amount(value, { symbol: "", unit: token });
+  const tokens = entries => entries ? Object.entries(entries).map(([ticker, value]) => tokenAmount(value, ticker)).join(" / ") || "—" : "—";
+  const price = value => Number(value) > 0 ? ui.amount(value) : "—";
+  const trigger = row => {
+    const label = typeof row.triggerCondition === "string" ? row.triggerCondition.trim().replace(/\s+\$?\d[\d,.]*(?:e[+-]?\d+)?$/i, "") : "";
+    return (label || "触发价") + " " + price(row.triggerPx);
+  };
   const hint = content => '<p class="hint">' + esc(content) + '</p>';
   function coverageLine(kind) {
     const status = coverage[kind];
@@ -79,16 +83,16 @@ export function renderLedger(view, result, { esc, table, tip, ui }) {
     const updated = "快照 " + time(result.snapshotAt) + "（UTC+8）" + (result.stale || coverage.open?.status === "unavailable" ? " · 可能已过时" : "");
     return hint(updated) + limit + details(["合约", "方向", "限价", "剩余数量", "触发条件"], rows.map(row => [
       row.coin, (row.side === "B" ? "买入" : row.side === "A" ? "卖出" : "—") + (row.reduceOnly ? " · 只减仓" : ""),
-      price(row.limitPx), quantity(row.sz), row.isTrigger ? (row.triggerCondition || "") + " " + price(row.triggerPx) : "—",
+      price(row.limitPx), quantity(row.sz), row.isTrigger ? trigger(row) : "—",
     ]), "当前无未成交订单。");
   }
   const grids = {
     fill: [["时间", "资产", "动作", "数量", "价格", "已实现盈亏", "手续费（含 Builder）", "其中 Builder 费"],
       row => [row.coin, row.dir || (row.side === "B" ? "买入" : "卖出"), quantity(row.sz), price(row.px), money(row.closedPnl),
-        qty(row.fee, feeToken(row)), qty(row.builderFee ?? (row.fee == null ? null : 0), feeToken(row))]],
-    funding: [["时间", "合约", "资金费", "资金费率"], row => [row.coin, qty(row.usdc, row.token || (row.coin?.includes(":") ? "结算金额" : "USDC")),
+        tokenAmount(row.fee, feeToken(row)), tokenAmount(row.builderFee ?? (row.fee == null ? null : 0), feeToken(row))]],
+    funding: [["时间", "合约", "资金费", "资金费率"], row => [row.coin, tokenAmount(row.usdc, row.token || (row.coin?.includes(":") ? "结算金额" : "USDC")),
       row.fundingRate != null && Number.isFinite(Number(row.fundingRate)) ? ui.percent(Number(row.fundingRate) * 100, true) : "—"]],
-    ledger: [["时间", "类型", "金额", "方向"], row => [movementNames[row.type] || row.type || "其他流水", qty(row.amount, row.token),
+    ledger: [["时间", "类型", "金额", "方向"], row => [movementNames[row.type] || row.type || "其他流水", tokenAmount(row.amount, row.token),
       row.toPerp === true ? "转入合约" : row.toPerp === false ? "转入现货" : "—"]],
     order: [["时间", "资产", "订单", "状态", "价格", "剩余数量"], row => [row.order.coin, row.order.oid,
       orderStatuses[row.status] || row.status, price(row.order.limitPx), quantity(row.order.sz)]],

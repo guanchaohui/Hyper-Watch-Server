@@ -133,7 +133,6 @@
   gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--quiet-line);
 }
 .holdings-tools .field input, .holdings-tools .field select { min-height: 34px; padding-block: 4px; }
-.holdings-body[data-layout="cards"] > table { display: none; }
 .holdings-body[data-layout="cards"] > .mobile-holdings {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(min(290px, 100%), 1fr)); gap: 7px; padding: 8px;
 }
@@ -166,7 +165,6 @@
   .mobile-wallet-strip .wallet-step { min-width: 36px; font-size: 20px; }
   .holdings-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 7px 10px; }
   .holdings-body[data-layout="table"] > table { display: table; min-width: 510px; }
-  .holdings-body[data-layout="table"] > .mobile-holdings { display: none; }
   .holdings-body[data-layout="table"] { overflow-x: auto; }
   .footer-end { justify-content: flex-start; }
   #overview-comparison-content { padding: 8px 10px; }
@@ -247,6 +245,18 @@
   padding: 8px 10px; min-width: 0;
 }
 .position-card .mobile-holding-top { display: flex; align-items: flex-start; gap: 8px; justify-content: space-between; }
+.position-order-hint { padding-inline: 13px; margin: 5px 0 0; font-size: 11px; }
+.position-grip {
+  display: grid; place-items: center; flex: 0 0 28px; width: 28px; min-height: 34px;
+  padding: 0; border: 0; border-radius: 6px; color: var(--muted); background: transparent;
+  cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none;
+}
+.position-grip:hover, .position-grip:focus-visible { color: var(--mint); background: var(--quiet-line); }
+.position-grip:active { cursor: grabbing; }
+.position-card[data-dragging] { opacity: .55; }
+.position-card[data-drop] { outline: 2px solid var(--mint); outline-offset: -2px; }
+.position-card[data-drop="before"] { box-shadow: inset 0 3px var(--mint); }
+.position-card[data-drop="after"] { box-shadow: inset 0 -3px var(--mint); }
 .holding-card-identity { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
 .position-card .position-pnl { margin-left: auto; max-width: 54%; text-align: right; }
 .position-card .position-pnl-amount { white-space: normal; overflow-wrap: anywhere; }
@@ -284,16 +294,13 @@
   .mobile-tabs button[aria-current="page"], .mobile-dock button[aria-pressed="true"] { color: var(--mint); }
   .mobile-tabs button[aria-current="page"] { background: #83f7c60d; border-top-color: var(--mint); }
   .mobile-dock button:disabled { opacity: .55; }
+  .position-grip { min-height: 44px; flex-basis: 36px; width: 36px; }
   .record-tabs { display: flex; gap: 8px; margin: 12px 0; }
   .record-tabs button, .mine-actions .btn { min-height: 44px; }
   .record-tabs [aria-pressed="true"] { color: var(--mint); border-color: #4d8970; }
   .holdings-tools .field :is(input, select) { min-height: 44px; }
   .holdings-tools input[type="search"] { font-size: 16px; }
-  .holdings-body[data-layout="auto"] > .holdings-table { display: none; }
-  .holdings-body[data-layout="auto"] > .mobile-holdings { display: block; }
-  .holdings-body[data-layout="auto"] > .contract-cards { display: grid; gap: 6px; padding: 7px; }
   .holdings-body[data-layout="table"] > .holdings-table { display: table; min-width: 510px; }
-  .holdings-body[data-layout="table"] > .mobile-holdings { display: none; }
   .holdings-body[data-layout="table"] { overflow-x: auto; }
 }
 

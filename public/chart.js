@@ -1,3 +1,5 @@
+import { formatMoney } from "./format-values.js";
+
 const timeOnly = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
 const dateOnly = new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" });
 const longDate = new Intl.DateTimeFormat("zh-CN", {
@@ -8,7 +10,6 @@ const chinaLongDate = new Intl.DateTimeFormat("zh-CN", {
   timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
 });
 const compactMoney = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 2 });
-const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
 function axisScale(points) {
   if (!points.length) return { min: 0, max: 4, step: 1 };
@@ -19,7 +20,7 @@ function axisScale(points) {
     high = Math.max(high, val);
   }
   const diff = high - low || Math.max(Math.abs(high) * 0.018, 0.04);
-  const rawStep = diff / 3.1;
+  const rawStep = Math.max(0.01, diff / 3.1);
   const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
   const step = ([1, 2, 2.5, 5, 10].find(value => value * magnitude >= rawStep) ?? 10) * magnitude;
   let min = Math.floor((low - diff * .09) / step) * step;
@@ -31,7 +32,7 @@ function axisScale(points) {
 
 function axisMoney(value, step) {
   if (Math.abs(value) >= 1000) return compactMoney.format(value);
-  const digits = Math.max(0, Math.min(8, Math.ceil(-Math.log10(step)) + 1));
+  const digits = Math.max(0, Math.min(2, Math.ceil(-Math.log10(step)) + 1));
   return new Intl.NumberFormat("en", { maximumFractionDigits: digits }).format(value);
 }
 
@@ -163,7 +164,7 @@ export function createChart(canvas, empty, tooltip, timeLabel, valueLabel) {
     tooltip.hidden = hovered < 0;
     if (hovered >= 0) {
       timeLabel.textContent = (period === "today" ? chinaLongDate : longDate).format(point[0]);
-      valueLabel.textContent = masked ? "••••••" : money.format(point[1]);
+      valueLabel.textContent = masked ? "••••••" : formatMoney(point[1]);
       const left = Math.max(2, Math.min(width - tooltip.offsetWidth - 2, px + (px > width / 2 ? -tooltip.offsetWidth - 10 : 10)));
       tooltip.style.left = left + "px";
       tooltip.style.top = Math.max(0, py - tooltip.offsetHeight - 8) + "px";
@@ -193,7 +194,7 @@ export function createChart(canvas, empty, tooltip, timeLabel, valueLabel) {
     if (changed || hovered >= next.points.length) hovered = -1;
     const name = next.series === "equity" ? "账户权益" : "区间盈亏";
     const last = next.points.at(-1);
-    const value = last && !next.masked ? `，最新样本 ${money.format(last[1])}` : "";
+    const value = last && !next.masked ? `，最新样本 ${formatMoney(last[1])}` : "";
     canvas.setAttribute("aria-label", `${name}历史图，${next.points.length} 个样本${value}`);
     draw();
   };

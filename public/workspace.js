@@ -477,7 +477,7 @@ export function setupWorkspace(ui) {
       const movements = cashMovements(ledgerRows).filter(item => item.time > 0).sort((a, b) => b.time - a.time);
       const positions = brief.value?.positions;
       const floating = positions?.every(row => row.pnl !== null) ? positions.reduce((sum, row) => sum + row.pnl, 0) : null;
-      const feeDisplay = totals.fees === null ? "—" : totals.fees.length ? totals.fees.map(([token, value]) => quantity(value) + " " + token).join(" / ") : "0";
+      const feeDisplay = totals.fees === null ? "—" : totals.fees.length ? totals.fees.map(([token, value]) => money(value, { symbol: "", unit: token })).join(" / ") : money(0, { symbol: "" });
       const cards = [["已实现盈亏", money(totals.realized, { signed: true })], ["当前浮盈亏 · 默认合约市场", money(floating, { signed: true })],
         ["成交手续费 · 原币种", feeDisplay], ["资金费 · 接口金额", money(totals.funding, { signed: true })],
         ["净充值提现 · USDC", money(totals.cashFlow, { signed: true })]];

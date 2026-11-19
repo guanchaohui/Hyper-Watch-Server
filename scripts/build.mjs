@@ -23,4 +23,4 @@ assets["/index.html"][1] = assets["/index.html"][1].replace('data-version=""', '
 await writeFile(output + "/version.js", "export default " + JSON.stringify(version) + ";\n");
 await writeFile(output + "/assets.js", "export default " + JSON.stringify(assets) + ";\n");
 for (const file of await readdir("worker")) await copyFile("worker/" + file, output + "/" + file);
-for (const file of ["analytics.js", "market.js", "notification-format.js"]) await copyFile("public/" + file, output + "/" + file);
+for (const file of ["analytics.js", "market.js", "format-values.js", "notification-format.js"]) await copyFile("public/" + file, output + "/" + file);

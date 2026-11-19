@@ -220,12 +220,14 @@
         </select></label>
         <label class="field"><span>排序</span><select id="position-sort">
           <option value="notional">仓位价值</option><option value="pnl">浮盈优先</option>
-          <option value="loss">浮亏优先</option>
+          <option value="loss">浮亏优先</option><option value="manual">手动排列</option>
         </select></label>
         <label class="field"><span>显示</span><select id="position-layout">
           <option value="auto">自动</option><option value="cards">卡片</option><option value="table">表格</option>
         </select></label>
       </div>
+      <p class="position-order-hint hint" id="position-order-hint" hidden>拖动卡片左侧的把手调整顺序</p>
+      <div class="sr-only" id="position-order-status" role="status"></div>
       <div class="sr-only" id="position-filter-status" role="status"></div>
       <div class="holdings-body" id="holdings-body"></div>
     </section>
