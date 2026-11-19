@@ -10,7 +10,7 @@ const mobileViewOf = view => view === "pnl" ? "activity" : view === "wallets" ? 
 const swipeContentExclusions = [
   "button", "a", "input", "select", "textarea", "label", "summary", "canvas", "[contenteditable]",
   "#mobile-wallet-strip", ".data-scroll", '.holdings-body[data-layout="table"]',
-  ".workspace-panel:has(#save-rules, #save-watch)", "#overview-layout[data-editing]",
+  ".workspace-panel:has(#save-watch)", "#overview-layout[data-editing]",
 ].join(",");
 const siteRuntime = document.documentElement.dataset.runtime === "site";
 const account = document.documentElement.dataset.account;
