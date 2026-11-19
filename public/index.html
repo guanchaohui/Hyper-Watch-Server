@@ -28,8 +28,8 @@
           <span id="wallet-label">添加钱包</span>
           <span class="icon wallet-caret" id="wallet-caret" data-icon="chevron" aria-hidden="true" hidden></span>
         </button>
-        <a class="btn" href="/account">账户</a>
-        <form method="post" action="/logout">
+        <a class="btn desktop-account" href="/account">账户</a>
+        <form class="desktop-account" method="post" action="/logout">
           <button class="btn" type="submit">退出登录</button>
         </form>
       </div>
@@ -50,7 +50,22 @@
     </div>
   </nav>
 
-  <main class="shell" id="dashboard">
+  <div class="mobile-dock">
+    <div class="mobile-shortcuts" id="mobile-shortcuts" aria-label="快速操作">
+      <button type="button" id="mobile-refresh"><span class="icon" data-icon="refresh" aria-hidden="true"></span>刷新</button>
+      <button type="button" id="mobile-quick" aria-pressed="false"><span class="icon" data-icon="bolt" aria-hidden="true"></span><span id="mobile-quick-label">快看</span></button>
+      <button type="button" id="mobile-privacy" aria-pressed="false"><span class="icon" id="mobile-privacy-icon" data-icon="eye" aria-hidden="true"></span><span id="mobile-privacy-label">隐藏金额</span></button>
+    </div>
+    <nav class="mobile-tabs" id="mobile-tabs" aria-label="底部导航">
+      <button type="button" data-view="over" aria-current="page"><span class="icon" data-icon="home" aria-hidden="true"></span>总览</button>
+      <button type="button" data-view="positions"><span class="icon" data-icon="layers" aria-hidden="true"></span>持仓</button>
+      <button type="button" data-view="activity"><span class="icon" data-icon="records" aria-hidden="true"></span>记录</button>
+      <button type="button" data-view="alerts"><span class="icon" data-icon="bell" aria-hidden="true"></span>提醒</button>
+      <button type="button" data-view="mine"><span class="icon" data-icon="user" aria-hidden="true"></span>我的</button>
+    </nav>
+  </div>
+
+  <main class="shell" id="dashboard" data-section="over">
     <section class="heading" aria-labelledby="page-title">
       <div>
         <div class="network"><span class="network-dot"></span> Hyperliquid 主网</div>
@@ -68,7 +83,6 @@
         <small id="wallet-switcher-role"></small><strong id="wallet-switcher-name"></strong>
       </div>
       <button type="button" class="btn wallet-step" id="wallet-next" aria-label="下一个钱包">›</button>
-      <button type="button" class="btn wallet-privacy" id="mobile-privacy" aria-pressed="false">隐藏金额</button>
     </section>
 
     <div class="notice" id="notice" hidden role="status">
@@ -95,7 +109,7 @@
         <div class="metric-foot" id="equity-note">Hyperliquid 账户估值</div>
       </article>
       <article class="metric" id="today-pinned" hidden>
-        <div class="metric-top"><h2>今日净盈亏</h2></div>
+        <div class="metric-top"><h2 id="today-net-title">今日净盈亏</h2></div>
         <div class="metric-number" id="today-net">—</div>
         <div class="metric-foot" id="today-net-note"></div>
       </article>
@@ -162,6 +176,7 @@
           </div>
           <span class="chart-unit">USD</span>
         </div>
+        <p class="chart-coverage hint" id="chart-coverage" hidden></p>
         <div class="chart-container" id="chart-container">
           <canvas id="chart" aria-label="账户权益历史图"></canvas>
           <div id="chart-empty" class="chart-empty" hidden></div>
@@ -201,7 +216,13 @@
         <span class="holding-info" id="holding-info"><i></i><span id="holding-info-text">未选择钱包</span></span>
       </div>
       <div class="holdings-tools" id="holdings-tools">
-        <label class="field"><span>搜索合约</span><input type="search" id="position-search" placeholder="BTC、NVDA…" maxlength="40"></label>
+        <div class="field position-search-field">
+          <label for="position-search">搜索合约</label>
+          <div class="position-search-input">
+            <input type="search" id="position-search" placeholder="BTC、NVDA…" maxlength="40">
+            <button type="button" class="btn" id="position-search-clear" aria-label="清除搜索" hidden><span class="icon" data-icon="close" aria-hidden="true"></span></button>
+          </div>
+        </div>
         <label class="field"><span>方向</span><select id="position-side">
           <option value="all">全部</option><option value="long">多仓</option><option value="short">空仓</option>
         </select></label>
@@ -213,6 +234,7 @@
           <option value="auto">自动</option><option value="cards">卡片</option><option value="table">表格</option>
         </select></label>
       </div>
+      <div class="sr-only" id="position-filter-status" role="status"></div>
       <div class="holdings-body" id="holdings-body"></div>
     </section>
 

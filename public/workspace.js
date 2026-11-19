@@ -134,6 +134,8 @@ export function setupWorkspace(ui) {
     ui.store("workspace-pending", dirty);
     document.body.classList.toggle("quick-mode", profile.quick);
     $("toggle-quick").setAttribute("aria-pressed", String(profile.quick));
+    $("mobile-quick").setAttribute("aria-pressed", String(profile.quick));
+    $("mobile-quick-label").textContent = profile.quick ? "退出快看" : "快看";
     selectDefaultWallet();
     renderMobileWallet();
   };
@@ -828,12 +830,31 @@ export function setupWorkspace(ui) {
     refreshPushControls();
   }
 
+  function recordNavigation() {
+    return '<nav class="record-tabs" aria-label="记录分类">' +
+      [["activity", "交易动态"], ["pnl", "盈亏账本"]].map(([view, label]) =>
+        '<button class="btn" type="button" data-record-view="' + view + '" aria-pressed="' +
+          String(active === view) + '">' + label + '</button>').join("") + '</nav>';
+  }
+
+  function minePage() {
+    const actions = '<div class="mine-actions">' + button("goto-wallets", "钱包管理") +
+      (siteRuntime ? '<a class="btn" href="/account">账户设置</a><form method="post" action="/logout"><button class="btn" type="submit">退出登录</button></form>' : "") +
+      '</div>';
+    viewRoot.innerHTML = '<div class="workspace-heading"><h1>我的</h1></div>' + panel(actions);
+  }
+
   function render() {
     const token = ++sequence;
-    $("dashboard").hidden = active !== "over";
-    viewRoot.hidden = active === "over";
-    if (active === "over") { renderComparison(); return; }
-    ({ wallets: walletsPage, activity: activityPage, pnl: pnlPage, alerts: alertPage })[active](token);
+    const dashboardView = active === "over" || active === "positions";
+    $("dashboard").hidden = !dashboardView;
+    $("dashboard").dataset.section = active;
+    $("page-title").textContent = active === "positions" ? "持仓" : "钱包总览";
+    $("mobile-shortcuts").hidden = !dashboardView;
+    viewRoot.hidden = dashboardView;
+    if (dashboardView) { if (active === "over") renderComparison(); return; }
+    ({ wallets: walletsPage, activity: activityPage, pnl: pnlPage, alerts: alertPage, mine: minePage })[active](token);
+    if (active === "activity" || active === "pnl") viewRoot.insertAdjacentHTML("afterbegin", recordNavigation());
     syncStatus();
   }
 
@@ -843,15 +864,22 @@ export function setupWorkspace(ui) {
       next = "over";
       changeHash = true;
     }
-    const matched = [...$("workspace-tabs").querySelectorAll("button")].find(el => el.dataset.view === next);
-    if (!matched) next = "over";
+    if (!["over", "positions", "wallets", "activity", "pnl", "alerts", "mine"].includes(next)) next = "over";
+    const changed = active !== next;
     active = next;
-    for (const button of $("workspace-tabs").querySelectorAll("button")) button.setAttribute("aria-pressed", String(button.dataset.view === next));
+    const desktopView = next === "positions" ? "over" : next === "mine" ? "wallets" : next;
+    const mobileView = next === "pnl" ? "activity" : next === "wallets" ? "mine" : next;
+    for (const button of $("workspace-tabs").querySelectorAll("button")) button.setAttribute("aria-pressed", String(button.dataset.view === desktopView));
+    for (const button of $("mobile-tabs").querySelectorAll("button")) {
+      if (button.dataset.view === mobileView) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    }
     if (changeHash && location.hash !== (next === "over" ? "" : "#" + next)) {
       try { history.replaceState(null, "", location.pathname + location.search + (next === "over" ? "" : "#" + next)); } catch {}
     }
+    if (changed) window.scrollTo(0, 0);
     render();
-    if (next === "over") ui.resumeOverview();
+    if (next === "over" || next === "positions") ui.resumeOverview();
   }
 
   comparison.addEventListener("toggle", () => {
@@ -872,10 +900,12 @@ export function setupWorkspace(ui) {
     fillsCache.clear();
     renderComparison();
   });
-  $("workspace-tabs").addEventListener("click", event => {
-    const next = event.target.closest("button")?.dataset.view;
-    if (next) show(next);
-  });
+  for (const nav of [$("workspace-tabs"), $("mobile-tabs")]) {
+    nav.addEventListener("click", event => {
+      const next = event.target.closest("button")?.dataset.view;
+      if (next) show(next === "activity" && nav.id === "mobile-tabs" && active === "pnl" ? "pnl" : next);
+    });
+  }
   $("wallet-prev").addEventListener("click", () => stepWallet(-1));
   $("wallet-next").addEventListener("click", () => stepWallet(1));
   document.addEventListener("hyper-wallet-changed", renderMobileWallet);
@@ -893,13 +923,13 @@ export function setupWorkspace(ui) {
     if (Math.abs(dx) >= 40 && Math.abs(dx) > 1.5 * Math.abs(dy)) stepWallet(dx < 0 ? 1 : -1);
   }, { passive: true });
   swipe.addEventListener("touchcancel", () => { swipeStart = null; });
-  $("toggle-quick").addEventListener("click", () => {
-    update({ ...profile, quick: !profile.quick });
-    show("over");
-  });
+  for (const id of ["toggle-quick", "mobile-quick"]) {
+    $(id).addEventListener("click", () => { update({ ...profile, quick: !profile.quick }); });
+  }
   viewRoot.addEventListener("click", event => {
     const selected = event.target.closest("button");
     if (!selected) return;
+    if (selected.dataset.recordView) { show(selected.dataset.recordView); return; }
     if (selected.dataset.inboxId) { markInbox(selected); return; }
     const address = selected.dataset.address;
     const action = selected.dataset.watchAction;
@@ -1039,5 +1069,5 @@ export function setupWorkspace(ui) {
     if (active === "over" && comparison.open && !comparisonContent.contains(document.activeElement)) renderComparison();
     if (active === "alerts") { inbox({ automatic: true }); refreshEquityLevels(); refreshCloudHealth(); refreshPushControls(); }
   }, 45000);
-  return { refreshComparison: renderComparison, refreshPrivacy: () => { if (active === "pnl") render(); else renderComparison(); }, openWallets: () => { show("wallets"); $("watch-address").focus(); } };
+  return { openPositions: () => show("positions"), refreshComparison: renderComparison, refreshPrivacy: () => { if (active === "pnl") render(); else renderComparison(); }, openWallets: () => { show("wallets"); $("watch-address").focus(); } };
 }

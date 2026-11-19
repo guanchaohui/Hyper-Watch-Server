@@ -10,6 +10,7 @@ import { hyperliquidInfo } from "./hyperliquid.js";
 import { inboxKinds, markInboxRead, readInbox } from "./inbox.js";
 import { readOverviewActivity } from "./overview-activity.js";
 import { ledgerPeriods, ledgerViews, readWalletLedger } from "./ledger-view.js";
+import { readEquitySnapshots } from "./ledger-sync.js";
 
 const marketTypes = new Set(["portfolio", "clearinghouseState", "spotClearinghouseState", "userFillsByTime", "userFunding", "userNonFundingLedgerUpdates"]);
 const timedTypes = new Set(["userFillsByTime", "userFunding", "userNonFundingLedgerUpdates"]);
@@ -196,6 +197,15 @@ export default {
           return json({ error: "请先将这个钱包保存到当前账户" }, 404);
         }
         return marketResult(async () => ({ positions: (await fullPositionSnapshot(address)).rows }));
+      }
+      if (route === "/api/equity-snapshots" && request.method === "GET") {
+        const address = addressOf(url.searchParams.get("wallet"));
+        if (!address) return json({ error: "无效的钱包地址" }, 400);
+        const row = await env.DB.prepare("SELECT settings FROM profiles WHERE user_id = ?").bind(user).first();
+        if (!row || !cleanProfile(JSON.parse(row.settings)).wallets.some(wallet => wallet.address === address)) {
+          return json({ error: "请先将这个钱包保存到当前账户" }, 404);
+        }
+        return json(await readEquitySnapshots(env.DB, address));
       }
       if (route === "/api/ledger" && request.method === "GET") {
         const address = addressOf(url.searchParams.get("wallet"));

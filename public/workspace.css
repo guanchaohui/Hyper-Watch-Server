@@ -156,16 +156,6 @@
 #install-help { flex-basis: 100%; }
 .footer:has(#install-help:not([hidden])) { flex-wrap: wrap; }
 @media (max-width: 660px) {
-  body { padding-bottom: calc(54px + env(safe-area-inset-bottom)); }
-  .workspace-nav-inner { justify-content: flex-end; min-height: 43px; }
-  .workspace-tabs {
-    position: fixed; inset: auto 0 0; z-index: 10;
-    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; min-height: 54px;
-    padding: 0 max(8px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(8px, env(safe-area-inset-left));
-    border-top: 1px solid var(--line); background: var(--panel);
-  }
-  .workspace-tabs button { min-height: 52px; border: 0; border-top: 2px solid transparent; }
-  .workspace-tabs button[aria-pressed="true"] { border-top-color: var(--mint); color: var(--mint); background: #83f7c60b; }
   .mobile-wallet-strip {
     display: flex; align-items: center; gap: 6px; margin-bottom: 10px; padding: 5px 6px;
     border: 1px solid var(--line); border-radius: 10px; background: var(--panel); flex-wrap: nowrap;
@@ -176,7 +166,6 @@
   .wallet-switcher-current strong { font-size: 13px; }
   .mobile-wallet-strip .btn { min-height: 44px; padding-inline: 8px; flex: none; }
   .mobile-wallet-strip .wallet-step { min-width: 36px; font-size: 20px; }
-  .mobile-wallet-strip .wallet-privacy { font-size: 12px; }
   .holdings-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 7px 10px; }
   .holdings-body[data-layout="table"] > table { display: table; min-width: 510px; }
   .holdings-body[data-layout="table"] > .mobile-holdings { display: none; }
@@ -253,3 +242,67 @@
 .inbox-meta .risk-critical { color: #ff9da9; }
 .inbox-meta .risk-warning { color: #f6ca7c; }
 .inbox-meta .risk-info { color: var(--mint); }
+
+
+.mobile-dock, .record-tabs { display: none; }
+.mine-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.position-search-input { position: relative; }
+.position-search-input input { width: 100%; padding-inline-end: 43px; }
+.position-search-input input::-webkit-search-cancel-button { appearance: none; }
+.position-search-input .btn {
+  position: absolute; inset: 0 0 0 auto; width: 43px; min-height: 0;
+  border: 0; background: transparent; color: var(--muted); justify-content: center; padding: 0;
+}
+.position-search-input .icon { width: 16px; height: 16px; }
+.chart-coverage { margin: 0 0 2px; }
+#dashboard[data-section="positions"] > :is(.metrics, .risk-cockpit, .overview, .account-events, .overview-comparison) { display: none; }
+#dashboard[data-section="positions"] .holdings { order: 1; }
+.holding-risk-line {
+  display: flex; flex-wrap: wrap; gap: 5px 9px; align-items: center;
+  margin: 6px 0 1px; color: var(--muted); font-size: 12px;
+}
+.holding-risk-line .risk-pill { min-height: 20px; padding: 2px 6px; font-size: 10px; }
+.holding-details summary { cursor: pointer; color: var(--muted); font-size: 11px; padding: 7px 0 3px; }
+.holding-details .position-risk-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+#position-count { white-space: nowrap; }
+
+@media (max-width: 780px), (display-mode: standalone) and (max-width: 980px) {
+  html { scroll-padding-bottom: calc(112px + env(safe-area-inset-bottom)); }
+  body { padding-bottom: calc(107px + env(safe-area-inset-bottom)); }
+  .workspace-nav, .desktop-account, .page-actions #refresh { display: none; }
+  .mobile-dock {
+    display: block; position: fixed; inset: auto 0 0; z-index: 15;
+    padding: 0 max(8px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(8px, env(safe-area-inset-left));
+    background: var(--panel); border-top: 1px solid var(--line); box-shadow: 0 -8px 24px #0003;
+  }
+  .mobile-shortcuts, .mobile-tabs { display: grid; gap: 0; }
+  .mobile-shortcuts { grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1px solid var(--quiet-line); }
+  .mobile-tabs { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .mobile-dock button {
+    border: 0; background: transparent; color: var(--muted); font-size: 12px;
+    display: flex; align-items: center; justify-content: center; gap: 5px; min-width: 0;
+  }
+  .mobile-shortcuts button { min-height: 44px; }
+  .mobile-shortcuts .icon { width: 16px; height: 16px; }
+  .mobile-tabs button { flex-direction: column; gap: 3px; min-height: 53px; padding: 4px; border-top: 2px solid transparent; }
+  .mobile-tabs .icon { width: 20px; height: 20px; }
+  .mobile-tabs button[aria-current="page"], .mobile-dock button[aria-pressed="true"] { color: var(--mint); }
+  .mobile-tabs button[aria-current="page"] { background: #83f7c60d; border-top-color: var(--mint); }
+  .mobile-dock button:disabled { opacity: .55; }
+  .record-tabs { display: flex; gap: 8px; margin: 12px 0; }
+  .record-tabs button, .mine-actions .btn { min-height: 44px; }
+  .record-tabs [aria-pressed="true"] { color: var(--mint); border-color: #4d8970; }
+  .holdings-tools .field :is(input, select) { min-height: 44px; }
+  .holdings-tools input[type="search"] { font-size: 16px; }
+  .holdings-body[data-layout="auto"] > .holdings-table { display: none; }
+  .holdings-body[data-layout="auto"] > .mobile-holdings { display: block; }
+  .holdings-body[data-layout="table"] > .holdings-table { display: table; min-width: 510px; }
+  .holdings-body[data-layout="table"] > .mobile-holdings { display: none; }
+  .holdings-body[data-layout="table"] { overflow-x: auto; }
+  .holding-details summary { min-height: 32px; }
+}
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}

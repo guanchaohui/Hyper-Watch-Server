@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
-import { day, positionRiskSummary, utc8DayStart } from "../dist/server/analytics.js";
+import { day, positionLiquidation, positionRiskSummary, utc8DayStart } from "../dist/server/analytics.js";
 import worker from "../dist/server/index.js";
 
 test("全市场、默认市场和断线时的强平风险口径独立", () => {
@@ -94,4 +94,21 @@ test("概览活动按登录账户隔离，共享公开缓存，今日盈亏去�
   const missing = await (await call("alpha", partial)).json();
   assert.equal(missing.fillsState, "incomplete");
   assert.equal(missing.realized, null);
+});
+
+test("全仓共享保证金与逐仓缺失分别展示，同样本给出最接近强平的仓位", () => {
+  const isolated = { coin: "xyz:IREN", size: 2, value: 200, margin: 50, mark: 100, liquidation: 92.8, mode: "isolated" };
+  const cross = { coin: "HYPE", size: 4, value: 80, margin: 20, mark: 20, liquidation: null, mode: "cross" };
+  const incomplete = { ...isolated, mark: null };
+  const missing = { ...isolated, liquidation: null };
+  assert.equal(positionLiquidation(isolated).level, "watch");
+  assert.equal(positionLiquidation(cross).state, "shared");
+  assert.equal(positionLiquidation({ ...cross, liquidation: 10 }).state, "priced");
+  assert.equal(positionLiquidation(incomplete).state, "unavailable");
+  assert.equal(positionLiquidation(missing).state, "unavailable");
+  const result = positionRiskSummary([cross, isolated], { complete: true, fresh: true });
+  assert.equal(result.closest.row, isolated);
+  assert.equal(result.closest.gap, positionLiquidation(isolated).gap);
+  assert.equal(result.margin, 70);
+  assert.equal(result.notional, 280);
 });

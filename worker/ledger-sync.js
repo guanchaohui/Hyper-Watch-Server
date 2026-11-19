@@ -1,4 +1,4 @@
-import { day, numberOf } from "./analytics.js";
+import { day, numberOf, utc8DayStart } from "./analytics.js";
 import { hyperliquidInfo, perpMarkets } from "./hyperliquid.js";
 import { marketRecord, marketRecordWrites, monitoredWallets } from "./market-ledger.js";
 import { parsePortfolio } from "./market.js";
@@ -73,7 +73,8 @@ async function syncEquity(db, wallet, now) {
     }
     const times = [...points.keys()];
     const sample = db.prepare("INSERT INTO wallet_equity_history VALUES (?, ?, ?, ?) " +
-      "ON CONFLICT(wallet,sampled_at) DO UPDATE SET equity = COALESCE(excluded.equity,equity), pnl = COALESCE(excluded.pnl,pnl)");
+      "ON CONFLICT(wallet,sampled_at) DO UPDATE SET equity = COALESCE(excluded.equity,equity), pnl = COALESCE(excluded.pnl,pnl) " +
+      "WHERE (excluded.equity IS NOT NULL AND excluded.equity IS NOT equity) OR (excluded.pnl IS NOT NULL AND excluded.pnl IS NOT pnl)");
     await db.batch([
       ...times.map(time => sample.bind(wallet, time, points.get(time).equity?.toString() ?? null, points.get(time).pnl?.toString() ?? null)),
       stateWrite(db, wallet, "equity", times.length ? Math.min(previous?.since ?? Infinity, ...times) : previous?.since ?? null,
@@ -133,7 +134,6 @@ export function startLedgerSync(db) {
       const preferHistory = lastPass.get(address) === false;
       lastPass.set(address, preferHistory);
       for (const kind of Object.keys(historyTypes)) await syncHistory(db, address, kind, now, preferHistory);
-      await syncEquity(db, address, now);
       await syncOrders(db, address, now);
     } catch {
       console.warn("账户历史同步暂未完成，下一轮重试。");
@@ -141,6 +141,50 @@ export function startLedgerSync(db) {
   }
   const timer = setInterval(tick, 15_000);
   const initial = setTimeout(tick, 8000);
+  timer.unref();
+  initial.unref();
+  return () => { clearInterval(timer); clearTimeout(initial); };
+}
+
+
+export async function readEquitySnapshots(db, wallet, now = Date.now()) {
+  const { results } = await db.prepare(
+    "SELECT sampled_at AS at, equity, pnl FROM wallet_equity_history WHERE wallet=? AND sampled_at BETWEEN ? AND ? ORDER BY sampled_at DESC LIMIT 2200",
+  ).bind(wallet, utc8DayStart(now) - 30 * minute, now).all();
+  const snapshots = { equity: [], pnl: [] };
+  for (const row of results.reverse()) {
+    for (const key of ["equity", "pnl"]) {
+      const value = numberOf(row[key]);
+      if (value !== null) snapshots[key].push([row.at, value]);
+    }
+  }
+  return snapshots;
+}
+
+export function startEquitySync(db) {
+  const attempted = new Map();
+  let running = false;
+  async function tick() {
+    if (running) return;
+    running = true;
+    try {
+      const wallets = await monitoredWallets(db);
+      const active = new Set(wallets);
+      for (const address of attempted.keys()) if (!active.has(address)) attempted.delete(address);
+      const now = Date.now();
+      const due = wallets.filter(wallet => now - (attempted.get(wallet) ?? 0) >= 90_000)
+        .sort((left, right) => (attempted.get(left) ?? 0) - (attempted.get(right) ?? 0)).slice(0, 3);
+      await Promise.all(due.map(wallet => {
+        attempted.set(wallet, now);
+        return syncEquity(db, wallet, now);
+      }));
+    } catch {
+      console.warn("权益快照同步暂未完成，下一轮重试。");
+    } finally { running = false; }
+  }
+  // Keep sampling independent of orders and history backfill. At most 12 portfolio reads per minute.
+  const timer = setInterval(tick, 15_000);
+  const initial = setTimeout(tick, 3000);
   timer.unref();
   initial.unref();
   return () => { clearInterval(timer); clearTimeout(initial); };

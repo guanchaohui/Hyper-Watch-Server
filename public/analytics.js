@@ -279,12 +279,54 @@ export function periodPnl(history, range, now = Date.now()) {
   return { pnl, start, equity: equity && equity[0] <= end ? equity[1] : null };
 }
 
+export const todayGap = 45 * 60_000;
+
+export function todayPortfolio(history, snapshots, now = Date.now()) {
+  const midnight = utc8DayStart(now);
+  const merge = (archived, official) => {
+    const points = new Map([...archived, ...official].filter(([at, value]) =>
+      Number.isSafeInteger(at) && at >= midnight - 30 * 60_000 && at <= now && Number.isFinite(value)));
+    return [...points].sort(([left], [right]) => left - right);
+  };
+  const day = history?.day;
+  const livePnl = day?.pnl ?? [];
+  const knownPnl = new Map(livePnl);
+  const savedPnl = snapshots?.pnl ?? [];
+  const common = savedPnl.filter(([at]) => knownPnl.has(at));
+  // Only join PnL snapshots when overlapping samples establish the same reference.
+  const sameBasis = common.length >= 2 &&
+    common.every(([at, value]) => Math.abs(knownPnl.get(at) - value) < 0.000001);
+  const raw = {
+    equity: merge(snapshots?.equity ?? [], day?.equity ?? []),
+    pnl: merge(sameBasis ? savedPnl : [], livePnl),
+  };
+  const startOf = points => {
+    const baseline = midnightSample(points, midnight);
+    return baseline ? { selected: [[midnight, baseline.value], ...points.slice(baseline.next)], estimated: baseline.estimated } :
+      { selected: points.filter(([at]) => at >= midnight), estimated: false };
+  };
+  const equity = startOf(raw.equity);
+  const pnl = startOf(raw.pnl);
+  const [start, initial] = pnl.selected[0] ?? [];
+  const [asOf, latest] = pnl.selected.at(-1) ?? [];
+  const basisEquity = equity.selected.find(([at]) => at === start)?.[1] ?? null;
+  const data = pnl.selected.length >= 2 ? {
+    start, asOf, pnl: latest - initial, equity: basisEquity,
+    estimated: pnl.estimated, equityEstimated: start === midnight && basisEquity !== null && equity.estimated,
+  } : null;
+  return {
+    data, pnlStart: start ?? null, equityStart: equity.selected[0]?.[0] ?? null,
+    equityEstimated: equity.estimated, midnight,
+    points: { equity: equity.selected, pnl: data ? pnl.selected.map(([at, value]) => [at, value - initial]) : [] },
+  };
+}
+
 export function filterPositions(positions, { query = "", side = "all", sort = "notional" } = {}) {
-  const symbol = query.trim().toLowerCase();
+  const tokens = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
   const readers = { pnl: row => row.pnl, loss: row => row.pnl, risk: gapToLiquidation };
   const read = Object.hasOwn(readers, sort) ? readers[sort] : row => row.value;
   const ascending = sort === "loss" || sort === "risk";
-  return positions.filter(row => row.coin.toLowerCase().includes(symbol) &&
+  return positions.filter(row => tokens.every(part => row.coin.toLowerCase().includes(part)) &&
     (side === "long" ? row.size > 0 : side === "short" ? row.size < 0 : true)).sort((a, b) => {
     const left = read(a);
     const right = read(b);
@@ -322,11 +364,18 @@ export function gapToLiquidation(row) {
   return Number.isFinite(distance) ? Math.max(0, distance) : null;
 }
 
+export function positionLiquidation(row) {
+  const gap = gapToLiquidation(row);
+  const state = gap !== null ? "priced" : row?.mode === "cross" && !(row.liquidation > 0) ? "shared" : "unavailable";
+  const level = gap === null ? "unknown" : gap <= 5 ? "critical" : gap <= 15 ? "watch" : "low";
+  return { state, gap, level };
+}
+
 export function positionRiskSummary(positions, { complete = false, fresh = false } = {}) {
   let closest = null;
   const rows = positions ?? [];
   for (const row of rows) {
-    const gap = gapToLiquidation(row);
+    const { gap } = positionLiquidation(row);
     if (gap !== null && (closest === null || gap < closest.gap)) closest = { row, gap };
   }
   const sum = key => positions && rows.every(row => Number.isFinite(row[key]) && row[key] >= 0)

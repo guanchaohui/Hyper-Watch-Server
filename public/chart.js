@@ -43,7 +43,7 @@ export function createChart(canvas, empty, tooltip, timeLabel, valueLabel) {
   let geometry = null;
 
   function draw() {
-    const { points, series, period, masked, emptyText } = settings;
+    const { points, series, period, masked, emptyText, gap = Infinity } = settings;
     const width = wrapper.clientWidth;
     const height = wrapper.clientHeight;
     if (!width || !height || !ctx) return;
@@ -104,22 +104,40 @@ export function createChart(canvas, empty, tooltip, timeLabel, valueLabel) {
     const gradient = ctx.createLinearGradient(0, plot.top, 0, plot.bottom);
     gradient.addColorStop(0, color + "45");
     gradient.addColorStop(1, color + "03");
-    const path = new Path2D();
-    points.forEach(([time, value], i) => {
-      if (i === 0) path.moveTo(x(time), y(value));
-      else path.lineTo(x(time), y(value));
-    });
-    const area = new Path2D(path);
-    area.lineTo(x(points.at(-1)[0]), plot.bottom);
-    area.lineTo(x(first), plot.bottom);
-    area.closePath();
-    ctx.fillStyle = gradient;
-    ctx.fill(area);
-    ctx.strokeStyle = color;
+    const segments = [];
+    let segment = [];
+    for (const point of points) {
+      if (segment.length && point[0] - segment.at(-1)[0] > gap) {
+        segments.push(segment);
+        segment = [];
+      }
+      segment.push(point);
+    }
+    segments.push(segment);
     ctx.lineWidth = 2;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
-    ctx.stroke(path);
+    for (const group of segments) {
+      const path = new Path2D();
+      group.forEach(([time, value], i) => {
+        if (i === 0) path.moveTo(x(time), y(value));
+        else path.lineTo(x(time), y(value));
+      });
+      const area = new Path2D(path);
+      area.lineTo(x(group.at(-1)[0]), plot.bottom);
+      area.lineTo(x(group[0][0]), plot.bottom);
+      area.closePath();
+      ctx.fillStyle = gradient;
+      ctx.fill(area);
+      ctx.strokeStyle = color;
+      ctx.stroke(path);
+      if (group.length === 1) {
+        ctx.beginPath();
+        ctx.fillStyle = color;
+        ctx.arc(x(group[0][0]), y(group[0][1]), 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
 
     const point = points[hovered] ?? points.at(-1);
     const px = x(point[0]);

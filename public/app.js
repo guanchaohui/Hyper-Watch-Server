@@ -1,11 +1,15 @@
 import { createChart } from "./chart.js";
 import { setupWorkspace } from "./workspace.js";
-import { filterPositions, gapToLiquidation, periodPnl, portfolioBrief, portfolioPeriodPoints, positionLeverage,
-  positionRiskSummary, utc8DayStart } from "./analytics.js";
+import { filterPositions, periodPnl, portfolioBrief, portfolioPeriodPoints, positionLeverage, positionLiquidation,
+  positionRiskSummary, todayGap, todayPortfolio, utc8DayStart } from "./analytics.js";
 import { addressOf, connectPerps, demoData, info, parsePortfolio, parsePositions, parseSpot } from "./market.js";
 
 const $ = id => document.getElementById(id);
 const icons = {
+  home: '<path d="m3 10 9-7 9 7m-2-2v12H5V8m5 12v-6h4v6"/>',
+  records: '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6m-6 4h6m-6 4h4"/>',
+  bell: '<path d="M18 8a6 6 0 0 0-12 0v5l-2 3h16l-2-3V8m-8 11a2 2 0 0 0 4 0"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   wallet: '<path d="M4 6h14a2 2 0 0 1 2 2v2m0 5v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a3 3 0 0 1 3-3h11"/><path d="M22 10h-5a2.5 2.5 0 0 0 0 5h5z"/><path d="M17.5 12.5h.01"/>',
   chevron: '<path d="m6 9 6 6 6-6"/>',
   refresh: '<path d="M20 8a8 8 0 0 0-13.4-3.5L4 7m0-4v4h4m-4 9a8 8 0 0 0 13.4 3.5L20 17m0 4v-4h-4"/>',
@@ -123,9 +127,9 @@ function syncLayout() {
   $("privacy").setAttribute("aria-label", privacyLabel);
   $("privacy").setAttribute("aria-pressed", String(masked));
   $("privacy").title = privacyLabel;
-  $("mobile-privacy").textContent = privacyLabel;
+  $("mobile-privacy-label").textContent = privacyLabel;
   $("mobile-privacy").setAttribute("aria-pressed", String(masked));
-  setIcon($("privacy-icon"), masked ? "eyeOff" : "eye");
+  for (const id of ["privacy-icon", "mobile-privacy-icon"]) setIcon($(id), masked ? "eyeOff" : "eye");
 }
 
 function renderConnection() {
@@ -140,6 +144,7 @@ function renderConnection() {
   $("status").dataset.state = status;
   if ($("status-label").textContent !== statusNames[status]) $("status-label").textContent = statusNames[status];
   $("refresh").disabled = s.requesting;
+  $("mobile-refresh").disabled = s.requesting || (!s.user && !s.demo);
   $("refresh").classList.toggle("is-spinning", s.requesting);
   $("notice").hidden = !failed;
   const errors = [...s.errors].filter(key => key !== "positions" || !streamLive);
@@ -159,12 +164,31 @@ function renderConnection() {
     tab === "spot" ? (s.errors.has("spot") ? "更新异常" : s.spot ? "定时刷新" : "等待余额") :
     streamLive ? "实时更新" : s.errors.has("positions") ? "更新异常" : s.positions ? (s.scope === "all" ? "上次快照" : "默认市场快照") : "等待持仓";
   $("holding-info").dataset.stream = tab === "positions" && streamLive ? "live" : "";
-  $("holding-info-text").textContent = holdingInfo;
+  const observed = s.times.get(tab);
+  $("holding-info-text").textContent = observed ? holdingInfo + " · " + clock.format(observed) : holdingInfo;
+  if ($("holdings-body").dataset.fresh !== String(positionsFresh(s))) renderHoldings();
   renderRiskCockpit();
 }
 
-const todayNote = (summary, history) => summary ? "00:00 UTC+8 起算" + (summary.estimated ? " · 估算" : "") :
-  history ? "缺少 UTC+8 零点附近样本" : "从 00:00 UTC+8 起算";
+const chinaClock = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+});
+function todayData(s) {
+  const now = Date.now();
+  const midnight = utc8DayStart(now);
+  const memo = s.todayMemo;
+  if (memo?.history === s.history && memo.snapshots === s.equitySnapshots && memo.result.midnight === midnight) return memo.result;
+  const result = todayPortfolio(s.history, s.equitySnapshots, now);
+  s.todayMemo = { history: s.history, snapshots: s.equitySnapshots, result };
+  return result;
+}
+const todayNote = result => {
+  const { data, pnlStart, midnight } = result;
+  const start = data?.start ?? pnlStart;
+  if (start == null) return "等待今日盈亏样本（UTC+8）";
+  if (start !== midnight) return "今日统计从 " + chinaClock.format(start) + " 开始（UTC+8）" + (data ? "" : " · 等待后续样本");
+  return "00:00 UTC+8 起算" + (data?.estimated || data?.equityEstimated ? " · 估算" : "") + (data ? "" : " · 等待后续样本");
+};
 
 function renderMetrics() {
   const s = session;
@@ -172,8 +196,8 @@ function renderMetrics() {
   const equity = day?.equity?.length ? day.equity : (s.history?.allTime?.equity ?? []);
   const last = equity.at(-1);
   const range = pnlSummarySelect.value;
-  const summary = periodPnl(s.history, range);
-  const today = range === "today" ? summary : periodPnl(s.history, "today");
+  const today = todayData(s);
+  const summary = range === "today" ? today.data : periodPnl(s.history, range);
   const daily = summary?.pnl ?? null;
   const first = summary?.equity;
   const pos = s.positions;
@@ -181,10 +205,12 @@ function renderMetrics() {
   setNumber("equity", last?.[1]);
   setNumber("daily", daily, { signed: true });
   setNumber("floating", unrealized, { signed: true });
-  $("range-label").textContent = range === "today" ? "今日净盈亏" : "区间盈亏";
+  const todayTitle = today.pnlStart !== null && today.pnlStart !== today.midnight ? "今日净盈亏（部分时段）" : "今日净盈亏";
+  $("range-label").textContent = range === "today" ? todayTitle : "区间盈亏";
+  $("today-net-title").textContent = todayTitle;
   $("today-pinned").hidden = range === "today";
-  setNumber("today-net", today?.pnl ?? null, { signed: true });
-  $("today-net-note").textContent = todayNote(today, s.history);
+  setNumber("today-net", today.data?.pnl ?? null, { signed: true });
+  $("today-net-note").textContent = todayNote(today);
   renderRealized();
   const change = $("daily-percent");
   const relative = daily !== null && first > 0 && !masked ? daily / first * 100 : null;
@@ -192,10 +218,12 @@ function renderMetrics() {
   change.textContent = percent(relative, true);
   change.className = "change " + tone(relative);
   $("daily-note").textContent = range === "today"
-    ? todayNote(summary, s.history)
+    ? todayNote(today)
     : change.hidden ? "按盈亏历史样本计算" : "相对期初权益";
   $("equity-note").textContent = s.user && last ? "样本时间 " + time.format(last[0]) : "Hyperliquid 账户估值";
-  $("floating-note").textContent = s.user && s.scope === "main" ? "默认市场的合约持仓" : "当前合约持仓的浮动盈亏";
+  const observed = s.times.get("positions");
+  const source = s.scope === "main" ? "默认市场" : "合约持仓";
+  $("floating-note").textContent = observed ? source + " · " + clock.format(observed) : "当前合约持仓的浮动盈亏";
 }
 
 function renderRealized() {
@@ -210,6 +238,12 @@ function renderRealized() {
 }
 
 const positionKey = row => JSON.stringify([row.dex, row.coin]);
+const positionRiskLabels = { critical: "高风险", watch: "需关注", low: "低风险", flat: "无持仓", unknown: "待评估" };
+const positionsFresh = s => {
+  const at = s.times.get("positions");
+  return Boolean(s.demo || (navigator.onLine && at && Date.now() - at <= positionStaleAfter && !s.errors.has("positions")));
+};
+const missingLiquidation = state => state === "shared" ? "共享保证金风险" : "暂不可计算";
 
 function riskDistance(gap) {
   if (!Number.isFinite(gap)) return "—";
@@ -220,16 +254,20 @@ function riskDistance(gap) {
 function renderRiskCockpit() {
   const s = session;
   const observed = s.times.get("positions");
-  const fresh = s.demo || (navigator.onLine && observed && Date.now() - observed <= positionStaleAfter && !s.errors.has("positions"));
+  const fresh = positionsFresh(s);
+  $("risk-cockpit").dataset.asOf = observed ?? "";
   const risk = positionRiskSummary(s.positions, { complete: s.scope === "all" || s.demo, fresh });
   const level = $("risk-level");
-  const labels = { critical: "高风险", watch: "需关注", low: "低风险", flat: "无持仓", unknown: "待评估" };
   level.dataset.level = risk.level;
-  if (level.textContent !== labels[risk.level]) level.textContent = labels[risk.level];
+  if (level.textContent !== positionRiskLabels[risk.level]) level.textContent = positionRiskLabels[risk.level];
   const source = s.demo ? "演示数据" : !s.positions ? (s.errors.has("positions") || !navigator.onLine ? "仓位暂不可用" : "等待仓位数据") :
     !fresh ? "仓位数据延迟 · 显示上次快照" : s.scope === "main" ?
       "仅默认市场 · " + clock.format(observed) : "全部永续市场 · " + clock.format(observed);
-  $("risk-coverage").textContent = source + (fresh && s.positions?.length && !risk.complete && s.scope !== "main" ? " · 部分强平数据缺失" : "");
+  const states = fresh ? (s.positions ?? []).map(row => positionLiquidation(row).state) : [];
+  const shared = states.filter(state => state === "shared").length;
+  const missing = states.filter(state => state === "unavailable").length;
+  $("risk-coverage").textContent = [source, shared ? shared + " 个全仓共享保证金" : "", missing ? missing + " 个强平距离暂不可计算" : ""]
+    .filter(Boolean).join(" · ");
   setNumber("risk-notional", risk.notional);
   setNumber("risk-margin", risk.margin);
   const closest = fresh ? risk.closest : null;
@@ -292,11 +330,22 @@ function renderExposure() {
 
 function renderChart() {
   const s = session;
-  const points = portfolioPeriodPoints(s.history, period, series);
-  const emptyText = s.errors.has("history") ? "暂时无法读取账户历史" :
-    s.history ? (period === "today" ? "缺少 UTC+8 零点附近的样本或盘中数据" : "该时段暂无历史数据") :
-      s.user ? "正在读取账户历史…" : "选择钱包后查看账户历史";
-  drawChart({ points, series, period, masked, emptyText });
+  const today = period === "today" ? todayData(s) : null;
+  const points = today ? today.points[series] : portfolioPeriodPoints(s.history, period, series);
+  const start = series === "equity" ? today?.equityStart : today?.pnlStart;
+  const hasGap = today && points.some(([at], index) => index > 0 && at - points[index - 1][0] > todayGap);
+  const coverage = $("chart-coverage");
+  coverage.hidden = !today || !points.length;
+  if (!coverage.hidden) {
+    const end = points.at(-1)[0];
+    const duration = start === today.midnight ? "00:00 起算" : "从 " + chinaClock.format(start) + " 起";
+    const estimated = series === "equity" ? today.equityEstimated : today.data?.estimated;
+    coverage.textContent = duration + " · 截至 " + chinaClock.format(end) + "（UTC+8）" +
+      (estimated ? " · 零点估算" : "") + (hasGap ? " · 采样缺口" : "");
+  }
+  const emptyText = today && series === "pnl" && today.pnlStart !== null ? todayNote(today) :
+    s.errors.has("history") ? "暂时无法读取账户历史" : s.history ? "暂无此区间的历史样本" : "正在读取历史样本…";
+  drawChart({ points, series, period, masked, emptyText, gap: today ? todayGap : Infinity });
 }
 
 function element(tag, className, value) {
@@ -336,15 +385,26 @@ function leverage(value, equity) {
   return ratio === null ? "—" : masked ? mask : ratio.toFixed(2) + "×";
 }
 
-function positionRisk(row, equity) {
-  const gap = gapToLiquidation(row);
-  const limit = !masked && gap !== null && gap <= 5 ? "risk-urgent" : "";
+function positionRisk(row, equity, liquidation) {
+  const { state, gap, level } = liquidation;
+  const emphasis = !masked && level === "critical" ? "risk-urgent" : "";
   return [
     ["保证金占用", amount(row.margin)],
     ["仓位杠杆率", leverage(row.value, equity)],
-    ["预估强平价格", amount(row.liquidation), limit],
-    ["距离强平还剩", riskDistance(gap), limit],
+    ["预估强平价格", row.liquidation > 0 ? amount(row.liquidation) : missingLiquidation(state), emphasis],
+    ["距离强平还剩", state === "priced" ? riskDistance(gap) : missingLiquidation(state), emphasis],
   ];
+}
+
+function cardRisk(liquidation, fresh) {
+  const level = fresh ? liquidation.level : "unknown";
+  const line = element("div", "holding-risk-line");
+  const badge = element("span", "risk-pill", positionRiskLabels[level]);
+  badge.dataset.level = level;
+  const distance = liquidation.state === "priced"
+    ? (fresh ? "距强平 " : "上次强平距离 ") + riskDistance(liquidation.gap) : missingLiquidation(liquidation.state);
+  line.append(badge, element("span", "", distance));
+  return line;
 }
 
 function positionPnl(row) {
@@ -366,15 +426,28 @@ function addHoldingField(fields, label, value, state = "") {
 
 function renderHoldings() {
   const s = session;
-  $("position-count").textContent = s.positions?.length ?? "—";
-  $("spot-count").textContent = s.spot?.length ?? "—";
   const body = $("holdings-body");
+  const openCards = new Set([...body.querySelectorAll(".holding-details[open]")].map(details => details.parentElement.dataset.position));
+  const focused = body.contains(document.activeElement) ? document.activeElement.closest("[data-position]")?.dataset.position : null;
+  const focusedSummary = focused && document.activeElement.tagName === "SUMMARY";
+  const fresh = positionsFresh(s);
+  body.dataset.fresh = String(fresh);
+  body.dataset.asOf = s.times.get("positions") ?? "";
+  $("spot-count").textContent = s.spot?.length ?? "—";
   const spot = tab === "spot";
   const raw = spot ? s.spot : s.positions;
-  const list = spot || !raw ? raw : filterPositions(raw, {
-    query: $("position-search").value, side: $("position-side").value, sort: positionSort.value,
-  });
-  $("holdings-tools").hidden = spot || !raw?.length;
+  const query = $("position-search").value;
+  const side = $("position-side").value;
+  const filtered = query.trim() || side !== "all";
+  const list = spot || !raw ? raw : filterPositions(raw, { query, side, sort: positionSort.value });
+  if (!spot) {
+    const count = list ? (filtered ? list.length + " / " + raw.length : String(raw.length)) : "—";
+    $("position-count").textContent = count;
+    const status = list && filtered ? "找到 " + list.length + " 个持仓，共 " + raw.length + " 个" : "";
+    if ($("position-filter-status").textContent !== status) $("position-filter-status").textContent = status;
+  }
+  $("position-search-clear").hidden = !query;
+  $("holdings-tools").hidden = spot || (!raw?.length && !filtered);
   body.dataset.layout = spot ? "auto" : positionLayout.value || "auto";
 
   if (!list?.length) {
@@ -420,11 +493,13 @@ function renderHoldings() {
     fieldValues.forEach((value, index) => {
       addHoldingField(fields, columns[index + (spot ? 1 : 2)], value);
     });
-    card.append(top, fields);
-    if (!spot) {
+    card.append(top);
+    if (spot) card.append(fields);
+    else {
       tr.dataset.position = card.dataset.position = positionKey(row);
       tr.tabIndex = card.tabIndex = -1;
-      const risk = positionRisk(row, equity);
+      const liquidation = positionLiquidation(row);
+      const risk = positionRisk(row, equity, liquidation);
       const detail = rows.insertRow();
       detail.className = "position-risk-row";
       const cell = detail.insertCell();
@@ -438,13 +513,20 @@ function renderHoldings() {
         addHoldingField(mobileFields, ...field);
       }
       cell.append(desktopFields);
-      card.append(mobileFields);
+      const breakdown = element("details", "holding-details");
+      breakdown.open = openCards.has(card.dataset.position);
+      breakdown.append(element("summary", "", "仓位详情"), fields, mobileFields);
+      card.append(cardRisk(liquidation, fresh), breakdown);
     }
     mobile.append(card);
   }
   body.replaceChildren(table, mobile);
   if (!spot) {
     body.append(element("p", "position-risk-note", "仓位杠杆率＝该仓位价值 ÷ 账户总权益。强平价格由 Hyperliquid 估算。"));
+    if (focused) {
+      const target = [...body.querySelectorAll("[data-position]")].find(node => node.dataset.position === focused && node.getClientRects().length);
+      (focusedSummary ? target?.querySelector("summary") : target)?.focus({ preventScroll: true });
+    }
     const row = s.focusCoin && list.find(row => row.coin === s.focusCoin);
     if (row && focusPosition(positionKey(row))) s.focusCoin = null;
   }
@@ -469,9 +551,28 @@ function renderPositions() {
   renderConnection();
 }
 
+async function refreshEquitySnapshots(s) {
+  if (!account || s.snapshotNext > Date.now()) return;
+  s.snapshotNext = Date.now() + 60_000;
+  try {
+    const response = await fetch("/api/equity-snapshots?" + new URLSearchParams({ wallet: s.user }), {
+      signal: s.controller.signal, cache: "no-store", headers: { "X-Hyper-Account": account },
+    });
+    if (!response.ok) return;
+    const snapshots = await response.json();
+    if (session !== s) return;
+    s.equitySnapshots = snapshots;
+    renderMetrics();
+    renderChart();
+  } catch {
+    // Keep the previous samples visible during reconnects.
+  }
+}
+
 async function refresh(s = session) {
   if (!s.user || s.requesting || session !== s) return;
   refreshOverviewActivity(s);
+  refreshEquitySnapshots(s);
   s.requesting = true;
   renderConnection();
 
@@ -492,6 +593,7 @@ async function refresh(s = session) {
       s.times.set(key, s.requestedAt);
       s.problems.delete(key);
       s.errors.delete(key);
+      if (key === "positions") renderPositions();
     } catch (error) {
       if (session !== s || (key === "positions" && live(s))) return;
       s.errors.add(key);
@@ -533,7 +635,7 @@ function openAccount(user, demo = false, focusCoin = null) {
   }
   const s = {
     user, demo, focusCoin, controller: new AbortController(), errors: new Set(),
-    history: null, positions: null, spot: null, requestedAt: 0, requesting: false,
+    history: null, equitySnapshots: null, snapshotNext: 0, positions: null, spot: null, requestedAt: 0, requesting: false,
     activity: null, activityNext: 0, activityPending: false, activityError: false,
     disconnect: null, streamAt: 0, scope: "", times: new Map(), problems: new Map(),
   };
@@ -602,9 +704,16 @@ $("risk-closest-link").addEventListener("click", ({ currentTarget }) => {
   $("position-search").value = "";
   $("position-side").value = "all";
   $("holdings-tabs").querySelector('[data-tab="positions"]').click();
+  if ($("mobile-tabs").getClientRects().length) workspace.openPositions();
   focusPosition(key);
 });
 $("position-search").addEventListener("input", renderHoldings);
+$("position-search-clear").addEventListener("click", () => {
+  const search = $("position-search");
+  search.value = "";
+  search.focus();
+  renderHoldings();
+});
 $("position-side").addEventListener("change", renderHoldings);
 for (const control of [positionSort, positionLayout]) {
   control.addEventListener("change", () => { savePreference(control.id, control.value); renderHoldings(); });
@@ -685,6 +794,7 @@ function togglePrivacy() {
 }
 $("privacy").addEventListener("click", togglePrivacy);
 $("mobile-privacy").addEventListener("click", togglePrivacy);
+$("mobile-refresh").addEventListener("click", () => $("refresh").click());
 $("refresh").addEventListener("click", () => {
   if (session.user) { session.activityNext = 0; refresh(); }
   else if (session.demo) { Object.assign(session, demoData()); renderAll(); }
@@ -757,7 +867,7 @@ const refreshVisible = () => {
   if (!document.hidden && !$("dashboard").hidden && autoRefresh && navigator.onLine) refresh();
 };
 setInterval(() => {
-  if (!autoRefresh && !document.hidden && !$("dashboard").hidden) renderRiskCockpit();
+  if (!autoRefresh && !document.hidden && !$("dashboard").hidden) renderConnection();
   refreshVisible();
 }, pollEvery);
 document.addEventListener("visibilitychange", () => {

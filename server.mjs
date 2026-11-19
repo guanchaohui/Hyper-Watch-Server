@@ -10,7 +10,7 @@ import worker from "./dist/server/index.js";
 import version from "./dist/server/version.js";
 import { checkAlerts } from "./dist/server/alerts.js";
 import { startFillStream } from "./dist/server/fill-stream.js";
-import { startLedgerSync } from "./dist/server/ledger-sync.js";
+import { startEquitySync, startLedgerSync } from "./dist/server/ledger-sync.js";
 import { startOrderStreams } from "./dist/server/order-stream.js";
 
 const publicUrl = new URL(process.env.PUBLIC_ORIGIN || "file:///");
@@ -321,6 +321,7 @@ server.listen(port, process.env.HOST || "127.0.0.1", () => {
   const stopFillStream = startFillStream(workerEnv);
   server.once("close", stopFillStream);
   server.once("close", startLedgerSync(DB));
+  server.once("close", startEquitySync(DB));
   server.once("close", startOrderStreams(DB));
   setTimeout(scheduledScan, 3000).unref();
   setInterval(scheduledScan, interval * 60000).unref();

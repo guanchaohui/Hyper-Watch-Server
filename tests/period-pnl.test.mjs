@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { day, periodPnl, portfolioPeriodPoints } from "../dist/server/analytics.js";
+import { day, periodPnl, portfolioPeriodPoints, todayPortfolio } from "../dist/server/analytics.js";
 
 test("北京时间零点跨 UTC 日期，滚动 24 小时与近 7 天使用各自样本", () => {
   const now = Date.parse("2026-11-18T03:10:00Z");
@@ -38,4 +38,34 @@ test("只用零点附近的两侧样本估算，过早的 21:46 不会成为今�
   const tooEarly = make(midnight - 134 * 60_000);
   assert.equal(periodPnl(tooEarly, "today", now), null);
   assert.deepEqual(portfolioPeriodPoints(tooEarly, "today", "equity", now), []);
+});
+
+test("展示今日的第一段可靠数据，零点缺失时用实际样本作为部分统计起点", () => {
+  const midnight = Date.parse("2026-11-18T16:00:00Z");
+  const first = midnight + 8 * 3_600_000 + 35 * 60_000;
+  const last = first + 15 * 60_000;
+  const day = { equity: [[first, 2000], [last, 1950]], pnl: [[first, 100], [last, 82]] };
+  const { data, equityStart, points } = todayPortfolio({ day }, null, last);
+  assert.deepEqual(data, { start: first, asOf: last, pnl: -18, equity: 2000, estimated: false, equityEstimated: false });
+  assert.equal(equityStart, first);
+  assert.deepEqual(points.pnl, [[first, 0], [last, -18]]);
+  assert.equal(todayPortfolio({ day }, null, first).data, null);
+});
+
+test("仅对有共同基准的历史盈亏补样，权益可以独立继续展示", () => {
+  const midnight = Date.parse("2026-11-18T16:00:00Z");
+  const first = midnight + 3_600_000;
+  const last = first + 60_000;
+  const day = { pnl: [[first, 110], [last, 130]], equity: [[first, 1900], [last, 1920]] };
+  const archived = { pnl: [[midnight, 105], [first, 110], [last, 130]], equity: [[midnight, 1885]] };
+  const recovered = todayPortfolio({ day }, archived, last);
+  assert.equal(recovered.data.start, midnight);
+  assert.equal(recovered.data.pnl, 25);
+  assert.equal(recovered.data.equity, 1885);
+  archived.pnl[1][1] = 10;
+  const drift = todayPortfolio({ day }, archived, last);
+  assert.equal(drift.data.start, first);
+  assert.equal(drift.data.pnl, 20);
+  assert.equal(drift.equityStart, midnight);
+  assert.deepEqual(todayPortfolio(null, archived, last).points.pnl, []);
 });

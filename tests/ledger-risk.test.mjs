@@ -195,3 +195,23 @@ test("分级风险判断、冷却、缺失数据、行情中断及锁屏隐私",
   assert.equal((await privatePush(payload, true)).tag, discreet.tag);
   assert.equal(await privatePush(payload, false), payload);
 });
+
+test("今日快照接口只返回当前账户保存的钱包和 UTC+8 相关样本", async t => {
+  const { sqlite, DB } = setup(t);
+  t.mock.method(Date, "now", () => now);
+  const midnight = periodStart("today", now);
+  const insert = sqlite.prepare("INSERT INTO wallet_equity_history VALUES (?,?,?,?)");
+  insert.run(wallet, midnight - 31 * minute, "10", "20");
+  insert.run(wallet, midnight - 15 * minute, "123", null);
+  insert.run(wallet, midnight, "124", "19");
+  insert.run(wallet, now + 1, "500", "800");
+  sqlite.prepare("INSERT INTO profiles VALUES (?, ?, ?)").run("alpha", JSON.stringify({ wallets: [{ address: wallet }] }), 1);
+  const route = "https://test.invalid/api/equity-snapshots?wallet=" + wallet;
+  const call = account => worker.fetch(new Request(route, {
+    headers: { "oai-authenticated-user-id": account, "x-hyper-account": account },
+  }), { DB });
+  assert.equal((await call("beta")).status, 404);
+  assert.deepEqual(await (await call("alpha")).json(), {
+    equity: [[midnight - 15 * minute, 123], [midnight, 124]], pnl: [[midnight, 19]],
+  });
+});
