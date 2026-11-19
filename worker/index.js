@@ -4,7 +4,8 @@ import { alertCheckMinutes, checkAlerts, equityAlertLevels } from "./alerts.js";
 import { readAlertHealth, readPushHealth, savePushHealth } from "./alert-health.js";
 import { cleanSubscription, sendPush } from "./push.js";
 import { formatNotificationPreview } from "./notification-format.js";
-import { hyperliquidInfo } from "./hyperliquid.js";
+import { allPerpPositions, hyperliquidInfo } from "./hyperliquid.js";
+import { inboxKinds, markInboxRead, readInbox } from "./inbox.js";
 
 const marketTypes = new Set(["portfolio", "clearinghouseState", "spotClearinghouseState", "userFillsByTime", "userFunding", "userNonFundingLedgerUpdates"]);
 const timedTypes = new Set(["userFillsByTime", "userFunding", "userNonFundingLedgerUpdates"]);
@@ -58,8 +59,12 @@ async function proxyMarket(request) {
     payload.endTime = Math.min(now, Number.isSafeInteger(raw.endTime) ? Math.max(start, raw.endTime) : now);
     if (raw.type === "userFillsByTime") payload.aggregateByTime = true;
   }
+  return marketResult(() => hyperliquidInfo(payload));
+}
+
+async function marketResult(read) {
   try {
-    return json(await hyperliquidInfo(payload));
+    return json(await read());
   } catch (error) {
     if (error.status === 429) {
       return Response.json({ error: error.message }, { status: 429, headers: {
@@ -172,6 +177,14 @@ export default {
       if (!user) return json({ error: "请先登录看板" }, 401);
       if (route === "/api/market" && request.method === "POST") return proxyMarket(request);
       if (request.headers.get("x-hyper-account") !== user) return json({ error: "登录账户已变化，请刷新页面" }, 401);
+      if (route === "/api/positions" && request.method === "GET") {
+        const address = addressOf(url.searchParams.get("wallet"));
+        const row = await env.DB.prepare("SELECT settings FROM profiles WHERE user_id = ?").bind(user).first();
+        if (!address || !row || !cleanProfile(JSON.parse(row.settings)).wallets.some(wallet => wallet.address === address)) {
+          return json({ error: "请先将这个钱包保存到当前账户" }, 404);
+        }
+        return marketResult(async () => ({ positions: await allPerpPositions(address) }));
+      }
       if (route === "/api/run-alerts" && request.method === "POST") return json(await checkAlerts(env, user));
       if (route === "/api/alert-health" && request.method === "GET") {
         return json({ cloud: await readAlertHealth(env.DB, user) });
@@ -180,8 +193,22 @@ export default {
       if (route === "/api/profile") return await syncProfile(request, env.DB, user);
       if (route.startsWith("/api/push-")) return await pushRoute(request, env, user, route);
       if (route === "/api/inbox" && request.method === "GET") {
-        const { results } = await env.DB.prepare("SELECT event_id AS id, title, body, created_at AS time FROM alerts WHERE user_id = ? ORDER BY created_at DESC LIMIT 60").bind(user).all();
-        return json({ items: results });
+        const kind = url.searchParams.get("kind") ?? "all";
+        const time = url.searchParams.get("before");
+        const id = url.searchParams.get("event");
+        if (!inboxKinds.has(kind) || ((time !== null || id !== null) &&
+          (!time || !Number.isSafeInteger(Number(time)) || Number(time) < 0 || !id || id.length > 512))) {
+          return json({ error: "无效的提醒筛选或分页位置" }, 400);
+        }
+        return json(await readInbox(env.DB, user, {
+          kind, unread: url.searchParams.get("unread") === "1", before: id ? { time: Number(time), id } : null,
+        }));
+      }
+      if (route === "/api/inbox/read" && request.method === "PUT") {
+        const { id } = (await body(request, 3000)) ?? {};
+        if (typeof id !== "string" || !id || id.length > 512) return json({ error: "无效的提醒编号" }, 400);
+        await markInboxRead(env.DB, user, id);
+        return json({ ok: true });
       }
       return json({ error: "未找到接口" }, 404);
     } catch (error) {

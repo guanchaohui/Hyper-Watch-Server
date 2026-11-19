@@ -42,6 +42,21 @@ sqlite.exec(`
     password_hash TEXT NOT NULL
   );
 `);
+const receiptsMigration = await readFile(new URL("./drizzle/0001_alert_receipts.sql", import.meta.url), "utf8");
+const tradeMigration = await readFile(new URL("./drizzle/0002_trade_alert_buffer.sql", import.meta.url), "utf8");
+sqlite.exec("BEGIN IMMEDIATE");
+try {
+  const schemaVersion = sqlite.prepare("PRAGMA user_version").get().user_version;
+  if (schemaVersion < 1) sqlite.exec(receiptsMigration);
+  if (schemaVersion < 2) {
+    sqlite.exec(tradeMigration);
+    sqlite.exec("PRAGMA user_version = 2");
+  }
+  sqlite.exec("COMMIT");
+} catch (error) {
+  sqlite.exec("ROLLBACK");
+  throw error;
+}
 
 const DB = {
   prepare(sql) {

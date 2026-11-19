@@ -120,3 +120,69 @@
 .notification-preview-content p { white-space: pre-wrap; color: var(--muted); overflow-wrap: anywhere; margin: 4px 0 0; }
 
 .notification-preview-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 9px; }
+
+.dashboard-empty { padding: clamp(16px, 4vw, 28px); }
+.dashboard-empty p, .dashboard-empty ol { margin: 8px 0 14px; color: var(--muted); }
+.dashboard-empty ol { padding-inline-start: 20px; }
+.dashboard-empty .inline-row { justify-content: flex-start; }
+.holdings-tools {
+  display: grid; grid-template-columns: minmax(140px, 2fr) repeat(3, minmax(100px, 1fr));
+  gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--quiet-line);
+}
+.holdings-tools .field input, .holdings-tools .field select { min-height: 34px; padding-block: 4px; }
+.holdings-body[data-layout="cards"] > table { display: none; }
+.holdings-body[data-layout="cards"] .mobile-holdings { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(270px, 100%), 1fr)); gap: 6px; padding: 8px; }
+.holdings-body[data-layout="cards"] .mobile-holding { padding: 8px 10px; border: 1px solid var(--quiet-line); border-radius: 8px; min-width: 0; }
+.holdings-body[data-layout="cards"] .mobile-holding-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.holdings-body[data-layout="cards"] .mobile-holding dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; margin: 5px 0 0; }
+.holdings-body[data-layout="cards"] .mobile-field dt { color: var(--muted); font-size: 10px; }
+.holdings-body[data-layout="cards"] .mobile-field dd { margin: 1px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.watch-flags { display: flex; gap: 8px; }
+.watch-flags [aria-pressed="true"] { color: var(--mint); }
+.compare-choices { margin: 0 0 10px; border: 1px solid var(--quiet-line); border-radius: 8px; padding: 0 10px; min-width: 0; }
+.compare-choices legend { color: var(--muted); font-size: 12px; }
+.compare-choices .check { overflow-wrap: anywhere; }
+#activity-summary:not(:empty) { margin-bottom: 13px; }
+.inbox-date { font-size: 12px; color: var(--muted); margin: 11px 0 2px; }
+.inbox-item { padding: 8px 0 9px; border-bottom: 1px solid var(--quiet-line); overflow-wrap: anywhere; }
+.inbox-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 4px; font-size: 11px; color: var(--muted); }
+.inbox-meta button, .inbox-meta .subtle { margin-left: auto; }
+.mobile-wallet-strip { display: none; }
+.wallet-alert-options { border-top: 1px solid var(--quiet-line); margin-top: 10px; padding-block: 8px 2px; }
+.wallet-alert-options summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.footer-end { flex-wrap: wrap; }
+#install-help { flex-basis: 100%; }
+.footer:has(#install-help:not([hidden])) { flex-wrap: wrap; }
+@media (max-width: 660px) {
+  body { padding-bottom: calc(54px + env(safe-area-inset-bottom)); }
+  .workspace-nav-inner { justify-content: flex-end; min-height: 43px; }
+  .workspace-tabs {
+    position: fixed; inset: auto 0 0; z-index: 10;
+    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; min-height: 54px;
+    padding: 0 max(8px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(8px, env(safe-area-inset-left));
+    border-top: 1px solid var(--line); background: var(--panel);
+  }
+  .workspace-tabs button { min-height: 52px; border: 0; border-top: 2px solid transparent; }
+  .workspace-tabs button[aria-pressed="true"] { border-top-color: var(--mint); color: var(--mint); background: #83f7c60b; }
+  .mobile-wallet-strip {
+    display: flex; align-items: center; gap: 6px; margin-bottom: 10px; padding: 5px 6px;
+    border: 1px solid var(--line); border-radius: 10px; background: var(--panel); flex-wrap: nowrap;
+  }
+  .wallet-switcher-current { flex: 1; min-width: 0; touch-action: pan-y; }
+  .wallet-switcher-current small, .wallet-switcher-current strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wallet-switcher-current small { color: var(--muted); font-size: 10px; }
+  .wallet-switcher-current strong { font-size: 13px; }
+  .mobile-wallet-strip .btn { min-height: 44px; padding-inline: 8px; flex: none; }
+  .mobile-wallet-strip .wallet-step { min-width: 36px; font-size: 20px; }
+  .mobile-wallet-strip .wallet-privacy { font-size: 12px; }
+  .holdings-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 7px 10px; }
+  .holdings-body[data-layout="table"] > table { display: table; min-width: 510px; }
+  .holdings-body[data-layout="table"] > .mobile-holdings { display: none; }
+  .holdings-body[data-layout="table"] { overflow-x: auto; }
+  .footer-end { justify-content: flex-start; }
+  #overview-comparison-content { padding: 8px 10px; }
+  .workspace-toolbar { gap: 7px; margin-bottom: 9px; }
+  .watch-card { padding: 10px; }
+  .watch-values dd, .readout strong { font-size: 16px; }
+  .watch-flags button { min-height: 36px; }
+}

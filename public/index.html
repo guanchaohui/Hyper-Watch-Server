@@ -62,13 +62,30 @@
       </div>
     </section>
 
+    <section class="mobile-wallet-strip" id="mobile-wallet-strip" aria-label="快速切换钱包" hidden>
+      <button type="button" class="btn wallet-step" id="wallet-prev" aria-label="上一个钱包">‹</button>
+      <div class="wallet-switcher-current" id="wallet-swipe" aria-live="polite">
+        <small id="wallet-switcher-role"></small><strong id="wallet-switcher-name"></strong>
+      </div>
+      <button type="button" class="btn wallet-step" id="wallet-next" aria-label="下一个钱包">›</button>
+      <button type="button" class="btn wallet-privacy" id="mobile-privacy" aria-pressed="false">隐藏金额</button>
+    </section>
+
     <div class="notice" id="notice" hidden role="status">
       <span class="icon" data-icon="info" aria-hidden="true"></span>
       <span id="notice-text"></span>
       <button class="quiet-link" id="retry" type="button">重试</button>
     </div>
 
-    <section class="metrics" aria-label="账户概览">
+    <section class="panel dashboard-empty" id="dashboard-empty" hidden aria-labelledby="onboarding-title">
+      <h2 id="onboarding-title">添加第一个钱包</h2>
+      <p>输入 Hyperliquid 公开地址即可查看仓位、权益和盈亏。</p>
+      <ol><li>在「钱包」中添加公开地址。</li><li>把自己的地址设为「我的钱包」，用于权益和杠杆提醒。</li><li>在「提醒」里选规则并开启本机通知。</li></ol>
+      <div class="inline-row"><button type="button" class="btn primary-btn" id="onboarding-wallet">添加钱包</button>
+        <button type="button" class="btn" id="onboarding-demo">查看演示</button></div>
+    </section>
+
+    <section class="metrics" aria-label="账户概览" data-wallet-detail>
       <article class="metric total-metric">
         <div class="metric-top">
           <h2><span class="icon metric-icon" data-icon="layers" aria-hidden="true"></span>账户权益</h2>
@@ -80,8 +97,8 @@
       <article class="metric">
         <div class="metric-top"><h2><span class="icon metric-icon" data-icon="trend" aria-hidden="true"></span>区间盈亏</h2>
           <select class="metric-range" id="pnl-summary-range" aria-label="概览盈亏区间">
+            <option value="today" selected>今日 UTC+8</option>
             <option value="day">近 24 小时</option>
-            <option value="today">今日 UTC+8</option>
             <option value="week">近 7 天</option>
             <option value="month">近 30 天</option>
             <option value="allTime">全部</option>
@@ -97,13 +114,13 @@
       </article>
     </section>
 
-    <div class="overview">
+    <div class="overview" data-wallet-detail>
       <section class="panel trend-panel" aria-labelledby="trend-title">
         <div class="panel-head trend-head">
           <h2 id="trend-title">资产走势</h2>
           <div class="segmented periods" id="periods" role="group" aria-label="图表时间范围">
-            <button type="button" data-period="day" aria-pressed="true">24 小时</button>
-            <button type="button" data-period="today" aria-pressed="false">今日</button>
+            <button type="button" data-period="today" aria-pressed="true">今日</button>
+            <button type="button" data-period="day" aria-pressed="false">24 小时</button>
             <button type="button" data-period="week" aria-pressed="false">7 天</button>
             <button type="button" data-period="month" aria-pressed="false">30 天</button>
             <button type="button" data-period="allTime" aria-pressed="false">全部</button>
@@ -146,7 +163,7 @@
       </section>
     </div>
 
-    <section class="panel holdings" aria-label="持仓与余额">
+    <section class="panel holdings" aria-label="持仓与余额" data-wallet-detail>
       <div class="holdings-head">
         <div class="holdings-tabs" id="holdings-tabs" role="group" aria-label="资产类型">
           <button type="button" data-tab="positions" aria-pressed="true">合约持仓 <span id="position-count">—</span></button>
@@ -154,17 +171,33 @@
         </div>
         <span class="holding-info" id="holding-info"><i></i><span id="holding-info-text">未选择钱包</span></span>
       </div>
+      <div class="holdings-tools" id="holdings-tools">
+        <label class="field"><span>搜索合约</span><input type="search" id="position-search" placeholder="BTC、NVDA…" maxlength="40"></label>
+        <label class="field"><span>方向</span><select id="position-side">
+          <option value="all">全部</option><option value="long">多仓</option><option value="short">空仓</option>
+        </select></label>
+        <label class="field"><span>排序</span><select id="position-sort">
+          <option value="notional">仓位价值</option><option value="pnl">浮盈优先</option>
+          <option value="loss">浮亏优先</option><option value="risk">离强平最近</option>
+        </select></label>
+        <label class="field"><span>显示</span><select id="position-layout">
+          <option value="auto">自动</option><option value="cards">卡片</option><option value="table">表格</option>
+        </select></label>
+      </div>
       <div class="holdings-body" id="holdings-body"></div>
     </section>
 
-    <details class="panel overview-comparison" id="overview-comparison">
+    <details class="panel overview-comparison" id="overview-comparison" data-wallet-detail>
       <summary>仓位对比</summary>
       <div id="overview-comparison-content"></div>
     </details>
 
     <footer class="footer">
       <span><span class="icon" data-icon="lock" aria-hidden="true"></span> 只读看板 <i>·</i> 数据来自 Hyperliquid</span>
-      <div class="footer-end"><span id="footer-update">请选择钱包</span><button type="button" id="diagnostics" class="quiet-link">连接详情</button></div>
+      <div class="footer-end"><span id="footer-update">请选择钱包</span><button type="button" id="auto-refresh" class="quiet-link" aria-pressed="false" hidden>暂停定时刷新</button>
+        <button type="button" id="diagnostics" class="quiet-link">连接详情</button>
+        <button type="button" id="install-app" class="quiet-link" hidden>安装应用</button></div>
+      <p class="hint" id="install-help" role="status" hidden></p>
     </footer>
   </main>
 

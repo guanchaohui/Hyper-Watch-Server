@@ -35,6 +35,7 @@ export function parsePortfolio(raw) {
 }
 
 export function parsePositions(states) {
+  if (states && !Array.isArray(states) && typeof states === "object") states = Object.entries(states);
   if (!Array.isArray(states) || !states.every(row => Array.isArray(row) && Array.isArray(row[1]?.assetPositions))) {
     throw new Error("Invalid position response");
   }

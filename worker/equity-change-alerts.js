@@ -1,4 +1,4 @@
-import { cashMovements, portfolioPeriodPoints, utc8DayStart } from "./analytics.js";
+import { cashMovements, midnightSample, portfolioPeriodPoints, utc8DayStart } from "./analytics.js";
 import { hyperliquidInfo } from "./hyperliquid.js";
 import { formatEquityNotification, formatEquityReason } from "./notification-format.js";
 
@@ -70,7 +70,7 @@ export async function accountEquityNotice(address, history, now, current, reason
     // The equity alert still goes out when the cash-flow lookup is unavailable.
   }
   return formatEquityNotification({
-    current, dayEquity, approximate: points[0]?.[0] !== startTime, reasons, swing, deposited, withdrawn,
+    current, dayEquity, approximate: midnightSample(history?.day?.equity ?? [], startTime)?.estimated, reasons, swing, deposited, withdrawn,
   });
 }
 

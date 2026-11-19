@@ -1,10 +1,13 @@
-import { cleanProfile, day, gapToLiquidation, latestEquitySample, positionChanges, positionLeverage, walletName } from "./analytics.js";
+import { cleanProfile, day, gapToLiquidation, latestEquitySample, positionLeverage, walletName } from "./analytics.js";
 import { parsePortfolio, parsePositions } from "./market.js";
-import { hyperliquidInfo } from "./hyperliquid.js";
+import { allPerpPositions, hyperliquidInfo } from "./hyperliquid.js";
 import { accountEquityNotice, equitySampleFreshness, planEquityChange, planEquityVolatility, readEquityChangeBaseline } from "./equity-change-alerts.js";
 import { saveAlertHealth, savePushHealth } from "./alert-health.js";
 import { sendPush } from "./push.js";
-import { formatEquityReason, formatFillNotification, formatLeverageNotification } from "./notification-format.js";
+import { formatEquityReason, formatLeverageNotification } from "./notification-format.js";
+
+import { flushFillAlerts, recordFillAlerts } from "./trade-alerts.js";
+export { recordFillAlerts } from "./trade-alerts.js";
 
 export const alertCheckMinutes = 60;
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
@@ -12,18 +15,6 @@ const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD
 function alertInsert(db, user, id, body, now, title = null) {
   return db.prepare("INSERT OR IGNORE INTO alerts (user_id, event_id, body, created_at, title) VALUES (?, ?, ?, ?, ?)")
     .bind(user, id, body, now, title);
-}
-
-export async function recordFillAlerts(db, user, wallet, selected, rows, earliest = 0, fields) {
-  const trades = positionChanges(rows, false).filter(change => change.time >= earliest && selected.includes(change.action));
-  if (!trades.length) return false;
-  const results = await db.batch(trades.map(change => {
-    const id = "fill:" + wallet.address + ":" + change.id;
-    const { title, body } = formatFillNotification(wallet, change, fields);
-    return db.prepare("INSERT OR IGNORE INTO alerts (user_id, event_id, title, body, created_at) VALUES (?, ?, ?, ?, ?)")
-      .bind(user, id, title, body, change.time);
-  }));
-  return results.some(result => result.meta.changes);
 }
 
 async function watchFills(db, user, wallet, rules, now) {
@@ -84,19 +75,6 @@ async function trackEquityPeak(db, user, address, trackingId, equity, now, state
   return equity;
 }
 
-async function readAllPositions(address) {
-  const registry = await hyperliquidInfo({ type: "perpDexs" }, true);
-  if (!Array.isArray(registry) || registry[0] !== null ||
-      !registry.every(dex => dex === null || (typeof dex?.name === "string" && dex.name))) {
-    throw new Error("Invalid perpetual exchange list");
-  }
-  const markets = new Set(["", ...registry.filter(Boolean).map(dex => dex.name)]);
-  const states = await Promise.all([...markets].map(async dex => [dex,
-    await hyperliquidInfo({ type: "clearinghouseState", user: address, ...(dex ? { dex } : {}) }, true),
-  ]));
-  return parsePositions(states);
-}
-
 async function watchRisk(db, user, wallet, rules, now) {
   const target = "risk:" + wallet.address;
   const prior = await db.prepare("SELECT breached FROM alert_status WHERE user_id = ? AND target = ?").bind(user, target).first();
@@ -106,11 +84,12 @@ async function watchRisk(db, user, wallet, rules, now) {
   const [equityResult, positionResult, leverageResult] = await Promise.allSettled([
     needsEquity ? hyperliquidInfo({ type: "portfolio", user: wallet.address }, true).then(parsePortfolio) : Promise.resolve(null),
     rules.loss || rules.gap ? hyperliquidInfo({ type: "clearinghouseState", user: wallet.address }, true).then(raw => parsePositions([["", raw]])) : Promise.resolve([]),
-    rules.leverageAlert ? readAllPositions(wallet.address) : Promise.resolve(null),
+    rules.leverageAlert ? allPerpPositions(wallet.address, true) : Promise.resolve(null),
   ]);
   const observations = [];
   const statements = [];
   const equityReasons = [];
+  const positionReasons = [];
   const sample = latestEquitySample(equityResult.value);
   const equity = sample?.[1] ?? null;
   let swing = null;
@@ -169,9 +148,13 @@ async function watchRisk(db, user, wallet, rules, now) {
       next.add(key);
       if (!old.has(key)) {
         if (key === "equity" || key.startsWith("equity-percent:")) equityReasons.push(body);
-        else statements.push(alertInsert(db, user, "risk:" + wallet.address + ":" + key + ":" + Math.floor(now / 60000), walletName(wallet) + " · " + body, now));
+        else positionReasons.push(body);
       }
     }
+  }
+  if (positionReasons.length) {
+    statements.push(alertInsert(db, user, "risk:" + wallet.address + ":" + now,
+      positionReasons.join("\n"), now, "仓位风险 · " + walletName(wallet)));
   }
   const perps = leverageResult.value;
   if (perps?.every(row => row.value !== null) && sample && sample[0] >= now - equitySampleFreshness) {
@@ -198,8 +181,7 @@ async function watchRisk(db, user, wallet, rules, now) {
   return [equityResult, positionResult, leverageResult].some(result => result.status === "rejected") ? "partial" : "ok";
 }
 
-async function deliver(env, user, now) {
-  if (!env.VAPID_PRIVATE || !env.VAPID_PUBLIC) return 0;
+async function deliver(env, user, now, ensureLease) {
   const { results: devices } = await env.DB.prepare("SELECT endpoint, subscription FROM push_devices WHERE user_id = ?")
     .bind(user).all();
   let sent = 0;
@@ -209,10 +191,14 @@ async function deliver(env, user, now) {
       "SELECT a.event_id, a.title, a.body, a.created_at FROM alerts a WHERE a.user_id = ? AND a.created_at >= ? AND NOT EXISTS (SELECT 1 FROM transmissions t WHERE t.user_id = a.user_id AND t.event_id = a.event_id AND t.endpoint = ?) ORDER BY a.created_at LIMIT 25",
     ).bind(user, Math.max(subscription.since, now - day), device.endpoint).all();
     for (const item of items) {
+      if (!await ensureLease()) return sent;
+      const reasons = item.event_id.startsWith("risk:") ? item.body.split("\n") : [];
+      const body = reasons.length > 4 ? reasons.slice(0, 4).join("\n") +
+        "\n另有 " + (reasons.length - 4) + " 项，打开提醒记录查看。" : item.body;
       try {
         const result = await sendPush(env, subscription, {
           title: item.title || "盯盘提醒",
-          body: item.body,
+          body,
           timestamp: item.created_at,
           urgency: item.title ? "high" : "normal",
           tag: item.event_id,
@@ -238,6 +224,30 @@ async function deliver(env, user, now) {
   return sent;
 }
 
+async function deliverWithLease(env, user) {
+  if (!env.VAPID_PRIVATE || !env.VAPID_PUBLIC) return 0;
+  const name = "delivery:" + user;
+  const holder = crypto.randomUUID();
+  const now = Date.now();
+  let until = now + 30_000;
+  const lock = await env.DB.prepare(
+    "INSERT INTO task_leases VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET holder = excluded.holder, lease_until = excluded.lease_until WHERE task_leases.lease_until <= ?",
+  ).bind(name, holder, until, now).run();
+  if (lock.meta.changes !== 1) return 0;
+  try {
+    return await deliver(env, user, now, async () => {
+      const time = Date.now();
+      if (until - time > 14_000) return true;
+      until = time + 30_000;
+      const result = await env.DB.prepare("UPDATE task_leases SET lease_until = ? WHERE name = ? AND holder = ?")
+        .bind(until, name, holder).run();
+      return result.meta.changes === 1;
+    });
+  } finally {
+    await env.DB.prepare("DELETE FROM task_leases WHERE name = ? AND holder = ?").bind(name, holder).run();
+  }
+}
+
 const deliveryQueue = new Map();
 
 export function queueAlertDelivery(env, user) {
@@ -251,7 +261,7 @@ export function queueAlertDelivery(env, user) {
     let sent = 0;
     while (state.pending) {
       state.pending = false;
-      sent += await deliver(env, user, Date.now());
+      sent += await deliverWithLease(env, user);
     }
     return sent;
   })().finally(() => deliveryQueue.delete(user));
@@ -277,6 +287,7 @@ async function checkProfile(env, profile, now, background) {
       jobs.push(watchRisk(env.DB, user, mine, rules, now));
     }
     const outcomes = await Promise.allSettled(jobs);
+    if (targets.length) await flushFillAlerts(env.DB, Date.now(), user);
     const failures = outcomes.filter(result => result.status === "rejected" || result.value === "partial").length;
     if (background) await saveAlertHealth(env.DB, user, "cloud-scan-health", { checked: outcomes.length, failures });
     return {
@@ -309,6 +320,7 @@ export async function checkAlerts(env, account) {
   }
   if (!account) {
     await env.DB.batch([
+      env.DB.prepare("DELETE FROM trade_alert_buffer WHERE finalized = 1 AND trade_at < ?").bind(now - day * 14),
       env.DB.prepare("DELETE FROM transmissions WHERE NOT EXISTS (SELECT 1 FROM alerts a WHERE a.user_id = transmissions.user_id AND a.event_id = transmissions.event_id AND a.created_at >= ?)").bind(now - day * 14),
       env.DB.prepare("DELETE FROM alerts WHERE created_at < ?").bind(now - day * 14),
     ]);

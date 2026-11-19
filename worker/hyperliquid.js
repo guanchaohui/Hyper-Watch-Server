@@ -1,4 +1,5 @@
 import { retryAfterMs } from "./retry.js";
+import { parsePositions } from "./market.js";
 
 const endpoint = "https://api.hyperliquid.xyz/info";
 const minute = 60_000;
@@ -86,4 +87,17 @@ export async function hyperliquidInfo(payload, priority = false) {
   }).finally(() => pending.delete(key));
   pending.set(key, promise);
   return promise;
+}
+
+export async function allPerpPositions(address, priority = false) {
+  const registry = await hyperliquidInfo({ type: "perpDexs" }, priority);
+  if (!Array.isArray(registry) || registry[0] !== null ||
+      !registry.every(dex => dex === null || (typeof dex?.name === "string" && dex.name))) {
+    throw new Error("Invalid perpetual exchange list");
+  }
+  const markets = new Set(["", ...registry.filter(Boolean).map(dex => dex.name)]);
+  const states = await Promise.all([...markets].map(async dex => [dex,
+    await hyperliquidInfo({ type: "clearinghouseState", user: address, ...(dex ? { dex } : {}) }, priority),
+  ]));
+  return parsePositions(states);
 }

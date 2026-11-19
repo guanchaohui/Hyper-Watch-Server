@@ -19,13 +19,13 @@ function formatQuantity(value) {
 }
 
 export function formatFillNotification(wallet, change, fields) {
-  const { coin, action, start, end, size, price: fillPrice, value, closedPnl } = change;
+  const { coin, action, start, end, size, price: fillPrice, value, closedPnl, count } = change;
   const symbol = typeof coin === "string" ? coin.split(":").at(-1).trim() || "合约" : "合约";
   const direction = action === "close" ? start : end;
   const side = Number.isFinite(direction) && direction !== 0 ? (direction > 0 ? "多" : "空") : "";
   const verb = Object.hasOwn(verbs, action) ? verbs[action] : "";
   const marker = side === "多" ? "🟢 " : side === "空" ? "🔴 " : "";
-  const title = marker + symbol + " · " + (verb && side ? verb + side : "仓位变动");
+  const title = marker + symbol + " · " + (verb && side ? verb + side : "仓位变动") + (count > 1 ? " · " + count + " 笔" : "");
   const name = typeof wallet?.name === "string" ? wallet.name.trim() : "";
   const address = addressOf(wallet?.address);
   const validPrice = Number.isFinite(fillPrice) && fillPrice > 0;
@@ -65,9 +65,9 @@ export function formatEquityNotification({ current, dayEquity, approximate = fal
   const title = swing ? (swing.change > 0 ? "📈" : "📉") + " 权益波动 · " +
     swing.minutes + " 分钟 " + (swing.change > 0 ? "+" : "") + swing.change.toFixed(2) + "%"
     : marker + (hasToday ? "账户权益 · 今日 " + dayLabel : "账户权益提醒");
-  const timing = approximate ? "UTC+8 零点附近样本" : "UTC+8 零点";
+  const timing = approximate ? "UTC+8 零点（估算）" : "UTC+8 零点";
   const lines = swing
-    ? [hasToday ? "今日 " + dayLabel + "（" + signedCurrency.format(delta) + "）" : "今日样本不足",
+    ? [hasToday ? (approximate ? "今日约 " : "今日 ") + dayLabel + "（" + signedCurrency.format(delta) + "）" : "今日样本不足",
       "当前权益 " + currency.format(current)]
     : [hasToday ? timing + "起 " + signedCurrency.format(delta) + "，当前 " + currency.format(current)
       : "当前权益 " + currency.format(current) + "，今日样本不足"];

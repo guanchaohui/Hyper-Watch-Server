@@ -1,5 +1,6 @@
 import { addressOf, cleanProfile } from "./analytics.js";
-import { queueAlertDelivery, recordFillAlerts } from "./alerts.js";
+import { queueAlertDelivery } from "./alerts.js";
+import { flushFillAlerts, recordFillAlerts } from "./trade-alerts.js";
 
 const url = "wss://api.hyperliquid.xyz/ws";
 const maxAddresses = 10;
@@ -62,7 +63,10 @@ export function startFillStream(env) {
     if (!subscribed.has(address)) return;
     const watchers = targets.get(address) ?? [];
     const outcomes = await Promise.allSettled(watchers.map(async ({ user, wallet, rules }) => {
-      if (await recordFillAlerts(env.DB, user, wallet, rules.actions, data.fills, 0, rules.notificationFields)) await queueAlertDelivery(env, user);
+      if (await recordFillAlerts(env.DB, user, wallet, rules.actions, data.fills, 0, rules.notificationFields)) {
+        await flushFillAlerts(env.DB, Date.now(), user);
+        await queueAlertDelivery(env, user);
+      }
     }));
     if (outcomes.some(outcome => outcome.status === "rejected")) {
       console.warn("实时成交提醒处理失败，定时扫描会补查。");
@@ -130,6 +134,21 @@ export function startFillStream(env) {
 
   const refresh = () => refreshTargets().catch(() => console.warn("实时成交订阅列表读取失败。"));
   const poll = setInterval(refresh, 5000);
+  let flushing = false;
+  const flush = setInterval(async () => {
+    if (flushing) return;
+    flushing = true;
+    try {
+      const accounts = await flushFillAlerts(env.DB);
+      for (const user of accounts) {
+        queueAlertDelivery(env, user).catch(() => console.warn("合并成交提醒将稍后重试。"));
+      }
+    } catch {
+      console.warn("合并成交提醒处理失败，将自动重试。");
+    } finally {
+      flushing = false;
+    }
+  }, 1000);
   const heartbeat = setInterval(() => {
     if (!socket) return;
     if (Date.now() - lastMessage > 45_000) {
@@ -139,12 +158,14 @@ export function startFillStream(env) {
     if (socket.readyState === WebSocket.OPEN) socket.send('{"method":"ping"}');
   }, 15_000);
   poll.unref();
+  flush.unref();
   heartbeat.unref();
   refresh();
 
   return () => {
     stopped = true;
     clearInterval(poll);
+    clearInterval(flush);
     clearInterval(heartbeat);
     clearTimeout(reconnect);
     socket?.close();

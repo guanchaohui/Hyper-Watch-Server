@@ -38,6 +38,16 @@ export function cleanEquityChangeAlert(value) {
 
 export const equityVolatilityDefaults = { minutes: 15, threshold: 3 };
 export const leverageAlertDefault = 3;
+export const tradeCooldownDefault = 10;
+
+export function tradeAlertSettings(wallet) {
+  const seconds = numberOf(wallet?.tradeCooldown);
+  const value = numberOf(wallet?.minTradeValue);
+  return {
+    tradeCooldown: Number.isInteger(seconds) && seconds >= 0 && seconds <= 300 ? seconds : tradeCooldownDefault,
+    minTradeValue: value > 0 && value <= 1e12 ? value : 0,
+  };
+}
 
 export function cleanEquityVolatility(value) {
   const minutes = numberOf(value?.minutes);
@@ -61,13 +71,17 @@ export function cleanProfile(value) {
     seen.add(address);
     const mine = item.role === "mine" && !foundMine;
     foundMine ||= mine;
+    const { tradeCooldown, minTradeValue } = tradeAlertSettings(item);
     wallets.push({
       address,
       name: typeof item.name === "string" ? item.name.trim().slice(0, 28) : "",
       group: typeof item.group === "string" ? item.group.trim().slice(0, 18) : "",
       role: mine ? "mine" : "watch",
       pinned: item.pinned === true,
+      favorite: item.favorite === true,
       notify: item.notify === true,
+      ...(tradeCooldown !== tradeCooldownDefault ? { tradeCooldown } : {}),
+      ...(minTradeValue ? { minTradeValue } : {}),
     });
   }
   const rules = value?.rules ?? {};
@@ -185,12 +199,27 @@ function sampleIndex(points, time) {
   return 0;
 }
 
+// A distant prior sample does not represent the value at midnight.
+export function midnightSample(points, midnight) {
+  const next = points.findIndex(([time]) => time >= midnight);
+  if (next < 0) return null;
+  const [after, value] = points[next];
+  if (after === midnight) return { value, next: next + 1, estimated: false };
+  const prior = points[next - 1];
+  const tolerance = 30 * 60_000;
+  if (!prior || midnight - prior[0] > tolerance || after - midnight > tolerance) return null;
+  const ratio = (midnight - prior[0]) / (after - prior[0]);
+  return { value: prior[1] + (value - prior[1]) * ratio, next, estimated: true };
+}
+
 export function portfolioPeriodPoints(history, range, series, now = Date.now()) {
   const points = history?.[range === "today" ? "day" : range]?.[series] ?? [];
   const cutoff = periodCutoff(range, now);
   const end = points.at(-1);
   if (!end || end[0] < cutoff) return [];
-  const selected = points.slice(sampleIndex(points, cutoff));
+  const midnight = range === "today" ? midnightSample(points, cutoff) : null;
+  if (range === "today" && !midnight) return [];
+  const selected = midnight ? [[cutoff, midnight.value], ...points.slice(midnight.next)] : points.slice(sampleIndex(points, cutoff));
   return series === "pnl"
     ? selected.map(([time, value]) => [time, value - selected[0][1]])
     : selected;
@@ -202,8 +231,51 @@ export function periodPnl(history, range, now = Date.now()) {
   const [start] = points[0];
   const [end, pnl] = points.at(-1);
   const equities = history[range === "today" ? "day" : range].equity;
+  if (range === "today") {
+    const midnightPnl = midnightSample(history.day.pnl, start);
+    const midnightEquity = midnightSample(equities, start);
+    return { pnl, start, equity: midnightEquity?.value ?? null,
+      ...(midnightPnl.estimated || midnightEquity?.estimated ? { estimated: true } : {}) };
+  }
   const equity = equities[sampleIndex(equities, start)];
   return { pnl, start, equity: equity && equity[0] <= end ? equity[1] : null };
+}
+
+export function filterPositions(positions, { query = "", side = "all", sort = "notional" } = {}) {
+  const symbol = query.trim().toLowerCase();
+  const readers = { pnl: row => row.pnl, loss: row => row.pnl, risk: gapToLiquidation };
+  const read = Object.hasOwn(readers, sort) ? readers[sort] : row => row.value;
+  const ascending = sort === "loss" || sort === "risk";
+  return positions.filter(row => row.coin.toLowerCase().includes(symbol) &&
+    (side === "long" ? row.size > 0 : side === "short" ? row.size < 0 : true)).sort((a, b) => {
+    const left = read(a);
+    const right = read(b);
+    if (!Number.isFinite(left)) return Number(Number.isFinite(right));
+    if (!Number.isFinite(right)) return -1;
+    return (ascending ? left - right : right - left) || a.coin.localeCompare(b.coin);
+  });
+}
+
+export function tradingActivity(changes) {
+  const actions = Object.fromEntries(Object.keys(actionLabels).map(action => [action, 0]));
+  const volumeByCoin = new Map();
+  const hours = Array(24).fill(0);
+  let volume = 0, known = 0, profitable = 0, realized = 0;
+  for (const row of changes) {
+    actions[row.action]++;
+    volume += row.value;
+    volumeByCoin.set(row.coin, (volumeByCoin.get(row.coin) ?? 0) + row.value);
+    hours[(new Date(row.time).getUTCHours() + 8) % 24]++;
+    if (["close", "reduce", "reverse"].includes(row.action) && Number.isFinite(row.closedPnl)) {
+      known++;
+      if (row.closedPnl > 0) profitable++;
+      realized += row.closedPnl;
+    }
+  }
+  const busiest = Math.max(...hours);
+  return { actions, volume, realized: known ? realized : null, profitable, known,
+    peakHours: hours.flatMap((count, hour) => count && count === busiest ? [hour] : []),
+    topCoins: [...volumeByCoin].sort((a, b) => b[1] - a[1]).slice(0, 3) };
 }
 
 export function gapToLiquidation(row) {

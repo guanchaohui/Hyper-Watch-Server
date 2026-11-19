@@ -1,5 +1,5 @@
 import { addressOf, actionLabels, cashMovements, cleanEquityChangeAlert, cleanProfile, day, equityVolatilityDefaults,
-  leverageAlertDefault, metricsFor, notificationFieldLabels, portfolioBrief, positionChanges, walletLimit, walletName } from "./analytics.js";
+  leverageAlertDefault, metricsFor, notificationFieldLabels, portfolioBrief, positionChanges, tradeAlertSettings, tradingActivity, walletLimit, walletName } from "./analytics.js";
 import { formatNotificationPreview } from "./notification-format.js";
 import { info, parsePortfolio, parsePositions } from "./market.js";
 
@@ -7,6 +7,9 @@ const $ = id => document.getElementById(id);
 const siteRuntime = document.documentElement.dataset.runtime === "site";
 const account = document.documentElement.dataset.account;
 const formatting = new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+const inboxDay = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "short" });
+const inboxClock = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const inboxLabels = { all: "全部提醒", fill: "仓位变动", equity: "账户权益", leverage: "总杠杆", risk: "仓位风险" };
 const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 const tip = text => '<div class="list-state">' + esc(text) + "</div>";
 const panel = html => '<section class="panel workspace-panel">' + html + '</section>';
@@ -48,42 +51,76 @@ export function setupWorkspace(ui) {
   let sequence = 0;
   let editing = "";
   let watchGroup = "";
-  let compareAddress = "";
+  let favoritesOnly = false;
+  let compareAddresses = ui.load("comparison-wallets", null);
+  let compareFilter = "all";
   let activityAddress = "";
   let pnlAddress = "";
   let range = "7";
   let eventFilter = "all";
+  let inboxKind = "all", inboxUnread = false;
+  let inboxItems = [], inboxNext = null, inboxExpanded = false, inboxRequest = 0;
   let pushConfig, pushRegistration;
   const briefCache = new Map();
   const fillsCache = new Map();
 
-  async function recentFills(address) {
-    const saved = fillsCache.get(address);
-    if (saved && Date.now() - saved.at < 40000) return saved.rows;
-    const rows = await info("userFillsByTime", address, undefined, { startTime: Date.now() - 7 * day, aggregateByTime: true });
-    if (!Array.isArray(rows)) throw new Error("成交记录格式异常");
-    fillsCache.set(address, { at: Date.now(), rows });
-    return rows;
+  function cachedRead(cache, key, lifetime, read) {
+    const cached = cache.get(key);
+    if (cached && Date.now() - cached.at < lifetime) return cached.result;
+    const entry = { at: Date.now(), result: Promise.resolve().then(read) };
+    cache.set(key, entry);
+    entry.result.catch(() => { if (cache.get(key) === entry) cache.delete(key); });
+    return entry.result;
   }
 
-  const briefOnly = async address => {
-    const startedAt = Date.now();
-    const cached = briefCache.get(address);
-    if (cached && startedAt - cached.startedAt < 10000) return cached;
+  function recentFills(address) {
+    return cachedRead(fillsCache, address, 40_000, async () => {
+      const rows = await info("userFillsByTime", address, undefined, { startTime: Date.now() - 7 * day, aggregateByTime: true });
+      if (!Array.isArray(rows)) throw new Error("成交记录格式异常");
+      return rows;
+    });
+  }
+
+  const briefOnly = (address, allMarkets = false) => cachedRead(briefCache, address + (allMarkets ? ":all" : ""), 10_000, async () => {
     const [history, positions] = await Promise.allSettled([
       info("portfolio", address).then(parsePortfolio),
-      info("clearinghouseState", address).then(raw => parsePositions([["", raw]])),
+      allMarkets && siteRuntime ? request("/api/positions?wallet=" + address).then(result => result.positions) :
+        info("clearinghouseState", address).then(raw => parsePositions([["", raw]])),
     ]);
     if (history.status === "rejected" && positions.status === "rejected") throw history.reason;
-    const next = { at: Date.now(), startedAt, history: history.value ?? null, positions: positions.value ?? null };
-    briefCache.set(address, next);
-    return next;
-  };
+    return { at: Date.now(), history: history.value ?? null, positions: positions.value ?? null };
+  });
 
   function selectDefaultWallet() {
     const current = ui.session();
     const wallet = own() ?? profile.wallets[0];
     if (!current.user && !current.demo && wallet) ui.observe(wallet.address);
+  }
+
+  function quickWallets() {
+    return [...profile.wallets].sort((a, b) => Number(b.role === "mine") - Number(a.role === "mine") ||
+      Number(b.pinned) - Number(a.pinned) || Number(b.favorite) - Number(a.favorite));
+  }
+
+  function renderMobileWallet() {
+    const wallets = quickWallets();
+    $("mobile-wallet-strip").hidden = !wallets.length;
+    if (!wallets.length) return;
+    const current = ui.session();
+    const index = wallets.findIndex(wallet => wallet.address === current.user);
+    const wallet = wallets[index];
+    const role = wallet?.role === "mine" ? "我的钱包" : wallet?.pinned || wallet?.favorite ? "重点观察" : "关注钱包";
+    $("wallet-switcher-role").textContent = wallet ? role + " · " + (index + 1) + " / " + wallets.length : "钱包快切";
+    $("wallet-switcher-name").textContent = wallet ? walletName(wallet) : current.demo ? "演示数据" : "选择已保存钱包";
+    $("wallet-prev").disabled = $("wallet-next").disabled = index >= 0 && wallets.length < 2;
+  }
+
+  function stepWallet(direction) {
+    const wallets = quickWallets();
+    if (!wallets.length) return;
+    const index = wallets.findIndex(wallet => wallet.address === ui.session().user);
+    const next = index < 0 ? (direction > 0 ? 0 : wallets.length - 1) : (index + direction + wallets.length) % wallets.length;
+    if (next !== index) ui.observe(wallets[next].address);
   }
 
   const persistLocal = () => {
@@ -92,6 +129,7 @@ export function setupWorkspace(ui) {
     document.body.classList.toggle("quick-mode", profile.quick);
     $("toggle-quick").setAttribute("aria-pressed", String(profile.quick));
     selectDefaultWallet();
+    renderMobileWallet();
   };
 
   function syncStatus() {
@@ -205,34 +243,47 @@ export function setupWorkspace(ui) {
   }
 
   function walletsPage() {
-    const list = [...profile.wallets].sort((a, b) => Number(b.pinned) - Number(a.pinned) || Number(b.role === "mine") - Number(a.role === "mine"));
+    const list = [...profile.wallets].sort((a, b) => Number(b.pinned) - Number(a.pinned) ||
+      Number(b.favorite) - Number(a.favorite) || Number(b.role === "mine") - Number(a.role === "mine"));
     const groups = [...new Set(list.map(row => row.group).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh"));
-    if (!groups.includes(watchGroup)) watchGroup = "";
-    const groupPicker = groups.length ? '<div class="workspace-toolbar">' +
+    if (watchGroup.startsWith("group:") && !groups.includes(watchGroup.slice(6))) watchGroup = "";
+    const groupPicker = list.length ? '<div class="workspace-toolbar">' +
       field("分组筛选", '<select id="wallet-group-filter">' + choose("", watchGroup, "全部分组") +
-      groups.map(group => choose(group, watchGroup, group)).join("") + '</select>') + '</div>' : "";
+      choose("ungrouped", watchGroup, "未分组") + groups.map(group => choose("group:" + group, watchGroup, group)).join("") +
+      '</select>') + check("favorites-only", "on", favoritesOnly, "只看收藏") + '</div>' : "";
     const wallet = selectedWallet(editing);
+    const { tradeCooldown, minTradeValue } = tradeAlertSettings(wallet);
     const prefill = wallet?.address ?? (ui.session().user && !selectedWallet(ui.session().user) ? ui.session().user : "");
-    const cards = list.filter(row => !watchGroup || row.group === watchGroup).map(row => {
+    const cards = list.filter(row => (!watchGroup || (watchGroup === "ungrouped" ? !row.group : "group:" + row.group === watchGroup)) &&
+      (!favoritesOnly || row.favorite)).map(row => {
       const short = row.address.slice(0, 6) + "…" + row.address.slice(-4);
       return '<article class="watch-card ' + (row.role === "mine" ? "own" : "") + '"><div class="watch-header"><span class="watch-title"><strong>' +
         esc(walletName(row)) + '</strong><span class="tag ' + row.role + '">' + (row.role === "mine" ? "我的钱包" : "关注") +
-        '</span></span><button class="quiet-link" type="button" data-watch-action="pin" aria-pressed="' + row.pinned + '" data-address="' + row.address + '">' +
-        (row.pinned ? "取消置顶" : "置顶") + '</button></div><p class="watch-meta" title="' + row.address + '">' + esc(short + (row.group ? " · " + row.group : "")) +
+        '</span></span><div class="watch-flags"><button class="quiet-link" type="button" data-watch-action="favorite" aria-pressed="' + row.favorite + '" data-address="' + row.address + '">' +
+        (row.favorite ? "取消收藏" : "收藏") + '</button><button class="quiet-link" type="button" data-watch-action="pin" aria-pressed="' + row.pinned + '" data-address="' + row.address + '">' +
+        (row.pinned ? "取消置顶" : "置顶") + '</button></div></div><p class="watch-meta" title="' + row.address + '">' + esc(short + (row.group ? " · " + row.group : "")) +
         (row.notify ? " · 动态提醒已勾选" : "") + '</p><div data-card="' + row.address + '" class="card-readout"><p class="watch-meta">正在读取余额和仓位…</p></div>' +
         '<div class="inline-row"><button type="button" class="btn" data-watch-action="observe" data-address="' + row.address + '">观察</button>' +
         '<button type="button" class="btn" data-watch-action="edit" data-address="' + row.address + '">编辑</button></div></article>';
     }).join("");
     viewRoot.innerHTML = titled("钱包列表", "同一页查看自己的钱包和关注对象。") +
-      groupPicker + (cards ? '<section class="watch-cards">' + cards + '</section>' : "") +
+      groupPicker + (cards ? '<section class="watch-cards">' + cards + '</section>' :
+        list.length ? panel(tip("当前分组或收藏条件下没有钱包。")) : "") +
       panel('<h2>' + (wallet ? "编辑钱包" : "添加钱包") + '</h2><div class="wallet-editor">' +
         field("公开地址", '<input id="watch-address" maxlength="42" placeholder="0x…" autocomplete="off" spellcheck="false" value="' + esc(prefill) + '"' + (wallet ? " readonly" : "") + '>', "address-field") +
         field("备注", '<input id="watch-name" maxlength="28" placeholder="例如 我的主账户" value="' + esc(wallet?.name ?? "") + '">') +
-        field("分组", '<input id="watch-group" maxlength="18" placeholder="例如 ETH" value="' + esc(wallet?.group ?? "") + '">') +
-        field("用途", '<select id="watch-role">' + choose("watch", wallet?.role ?? "watch", "关注") + choose("mine", wallet?.role ?? "watch", "我的钱包") + '</select>') +
+        field("分组", '<input id="watch-group" list="wallet-groups" maxlength="18" placeholder="选择或创建分组" value="' + esc(wallet?.group ?? "") +
+          '"><datalist id="wallet-groups">' + groups.map(group => '<option value="' + esc(group) + '"></option>').join("") + '</datalist>') +
+        field("用途", '<select id="watch-role">' + choose("watch", wallet?.role ?? (list.length ? "watch" : "mine"), "关注") +
+          choose("mine", wallet?.role ?? (list.length ? "watch" : "mine"), "我的钱包") + '</select>') +
         button("save-watch", wallet ? "保存" : "添加") + '</div>' +
         '<div class="inline-row">' + check("watch-notify", "on", wallet?.notify, "接收这个钱包的仓位变动") +
         (wallet ? '<div>' + button("cancel-edit", "取消编辑") + ' ' + button("remove-watch", "移除") + '</div>' : '') + '</div>' +
+        '<details class="wallet-alert-options"' + (wallet?.notify ? ' open' : '') + '><summary>成交降噪设置</summary><div class="rule-thresholds">' +
+        field("加减仓合并窗口（秒）", '<input id="trade-cooldown" type="number" min="0" max="300" step="1" value="' + tradeCooldown + '">') +
+        field("合并后的最低名义金额（USD）", '<input id="min-trade-value" type="number" min="0" max="1000000000000" step="any" value="' + minTradeValue + '">') +
+        '</div><p class="hint">每个钱包独立设置。窗口填 0 逐笔检查，金额填 0 接收所有金额。开仓、平仓和反手即时处理。</p></details>' +
+        (!list.length ? '<p class="hint">添加公开地址即可开始监控。保存为「我的钱包」后可设置权益和杠杆提醒。</p>' : '') +
         '<span id="wallet-message" class="status-inline" role="status"></span>' + syncFragment());
     loadCards();
   }
@@ -243,10 +294,19 @@ export function setupWorkspace(ui) {
     if (!address) { message.textContent = "请输入 42 个字符的 0x 钱包地址。"; $("watch-address").focus(); return; }
     if (!editing && selectedWallet(address)) { message.textContent = "这个钱包已在列表中。"; return; }
     if (!editing && profile.wallets.length >= walletLimit) { message.textContent = "已达到 " + walletLimit + " 个钱包。"; return; }
+    for (const input of [$("trade-cooldown"), $("min-trade-value")]) {
+      if (!input.validity.valid) {
+        input.closest("details").open = true;
+        input.reportValidity();
+        return;
+      }
+    }
     const role = $("watch-role").value;
     const row = {
       address, role, name: $("watch-name").value, group: $("watch-group").value,
-      pinned: selectedWallet(address)?.pinned ?? false, notify: viewRoot.querySelector('[name="watch-notify"]').checked,
+      pinned: selectedWallet(address)?.pinned ?? false, favorite: selectedWallet(address)?.favorite ?? false,
+      notify: viewRoot.querySelector('[name="watch-notify"]').checked,
+      ...tradeAlertSettings({ tradeCooldown: $("trade-cooldown").value, minTradeValue: $("min-trade-value").value }),
     };
     const others = profile.wallets.filter(wallet => wallet.address !== address).map(wallet =>
       role === "mine" && wallet.role === "mine" ? { ...wallet, role: "watch" } : wallet);
@@ -266,11 +326,22 @@ export function setupWorkspace(ui) {
       (!activityAddress ? noWallet("先添加一个公开钱包，即可查看仓位变化。") : panel(
         '<div class="workspace-toolbar">' + field("观察钱包", select("activity-wallet", activityAddress, list), "flex") +
         field("变动类型", '<select id="event-filter">' + choose("all", eventFilter, "全部变动") + Object.entries(actionLabels).map(([value, name]) => choose(value, eventFilter, name)).join("") + '</select>') +
-        button("refresh-view", "刷新") + '</div><div id="activity-data">' + tip("正在读取成交记录…") + '</div>'));
+        button("refresh-view", "刷新") + '</div><div id="activity-summary"></div><div id="activity-data">' + tip("正在读取成交记录…") + '</div>'));
     if (!activityAddress) return;
     recentFills(activityAddress).then(raw => {
       if (token !== sequence) return;
-      const rows = positionChanges(raw).filter(row => eventFilter === "all" || row.action === eventFilter).reverse();
+      const changes = positionChanges(raw);
+      const rows = changes.filter(row => eventFilter === "all" || row.action === eventFilter).reverse();
+      if (changes.length) {
+        const stats = tradingActivity(changes);
+        const hours = stats.peakHours.map(hour => String(hour).padStart(2, "0") + ":00").join("、");
+        const summary = [["成交名义额", money(stats.volume)], ["已实现盈亏", money(stats.realized, { signed: true })],
+          ["盈利的减仓／平仓／反手", stats.known ? stats.profitable + " / " + stats.known : "—"], ["最活跃时段 · UTC+8", hours || "—"]];
+        $("activity-summary").innerHTML = '<h2>近 7 天交易行为</h2><div class="readout-grid">' +
+          summary.map(([name, value]) => '<div class="readout"><small>' + esc(name) + '</small><strong>' + esc(value) + '</strong></div>').join("") +
+          '</div><p class="hint">' + esc(Object.entries(stats.actions).map(([action, count]) => actionLabels[action] + " " + count).join(" · ")) +
+          '</p><p class="hint">' + esc("成交额靠前 " + stats.topCoins.map(([coin, value]) => coin + " " + money(value)).join(" · ")) + '</p>';
+      }
       $("activity-data").innerHTML = (raw.length >= 2000 ? '<p class="hint">成交量较大，已达到接口的单次返回上限。</p>' : '') +
         (rows.length ? '<div class="timeline">' + rows.slice(0, 100).map(row => {
           const direction = (row.end || row.start) > 0 ? "多" : "空";
@@ -285,33 +356,62 @@ export function setupWorkspace(ui) {
     if (!comparison.open) return;
     const mine = own();
     const watch = profile.wallets.filter(row => row.address !== mine?.address);
-    compareAddress = watch.some(row => row.address === compareAddress) ? compareAddress : watch[0]?.address;
-    if (!mine || !compareAddress) {
+    if (!mine || !watch.length) {
       comparisonContent.innerHTML = tip("在「钱包」设置我的钱包，并添加一个关注钱包。");
       return;
     }
-    comparisonContent.innerHTML = '<div class="workspace-toolbar">' +
-      field("跟谁对比", select("compare-wallet", compareAddress, watch), "flex") +
-      button("refresh-comparison", "刷新") + '</div><div id="compare-data">' + tip("正在读取两边仓位…") + '</div>';
+    compareAddresses = Array.isArray(compareAddresses) ? watch.filter(wallet => compareAddresses.includes(wallet.address))
+      .slice(0, 3).map(wallet => wallet.address) : [watch[0].address];
+    const peers = watch.filter(wallet => compareAddresses.includes(wallet.address));
+    const selected = [mine, ...peers];
+    comparisonContent.innerHTML = '<fieldset class="compare-choices"><legend>对比钱包（最多选 3 个）</legend><div class="rule-actions">' +
+      watch.map(wallet => {
+        const checked = compareAddresses.includes(wallet.address);
+        return '<label class="check"><input type="checkbox" name="compare-wallet" value="' + wallet.address + '"' +
+          (checked ? " checked" : peers.length >= 3 ? " disabled" : "") + '>' + esc(walletName(wallet)) + '</label>';
+      }).join("") + '</div></fieldset><div class="workspace-toolbar">' +
+      field("合约范围", '<select id="compare-filter">' + choose("all", compareFilter, "全部") +
+        choose("common", compareFilter, "共同持仓") + choose("different", compareFilter, "方向或持仓不同") + '</select>') +
+      button("refresh-comparison", "刷新") + '</div><div id="compare-data" aria-live="polite">' +
+      tip(peers.length ? "正在读取所选钱包的仓位…" : "勾选至少一个关注钱包。") + '</div>';
+    if (!peers.length) return;
     const output = $("compare-data");
-    const other = selectedWallet(compareAddress);
-    Promise.all([briefOnly(mine.address), briefOnly(other.address), recentFills(other.address).catch(() => null)]).then(([left, right, recent]) => {
+    Promise.all(selected.map(async (wallet, index) => {
+      const [snapshot, recent] = await Promise.allSettled([
+        briefOnly(wallet.address, true), index ? recentFills(wallet.address) : [],
+      ]);
+      const data = snapshot.value;
+      const positions = data?.positions ? new Map(data.positions.map(row => [row.coin, row])) : null;
+      const lastChanges = new Map(positionChanges(recent.value).map(change => [change.coin, change]));
+      const closed = new Set([...lastChanges].filter(([coin, change]) => change.action === "close" &&
+        (siteRuntime || !coin.includes(":")) && positions && !positions.has(coin)).map(([coin]) => coin));
+      return { positions, closed, equity: portfolioBrief(data?.history).equity, flowsMissing: index > 0 && recent.status === "rejected" };
+    })).then(snapshots => {
       if (!output.isConnected || !comparison.open) return;
-      if (!left.positions || !right.positions) { output.innerHTML = tip("其中一个钱包的仓位快照无法读取。"); return; }
-      const a = new Map(left.positions.map(row => [row.coin, row]));
-      const b = new Map(right.positions.map(row => [row.coin, row]));
-      const ae = portfolioBrief(left.history).equity;
-      const be = portfolioBrief(right.history).equity;
-      const format = (row, equity) => row ? esc((row.size > 0 ? "多" : "空") + " " + quantity(Math.abs(row.size))) +
-        '<div class="subtle">' + esc("均价 " + money(row.entry) + " · 仓位杠杆率 " + ui.leverage(row.value, equity)) + '</div>' : "当前无仓";
-      const mostRecent = new Map(positionChanges(recent).map(change => [change.coin, change]));
-      const recentCloses = [...mostRecent].filter(([coin, change]) => !coin.includes(":") && !b.has(coin) && change.action === "close").map(([coin]) => coin);
-      const rows = [...new Set([...a.keys(), ...b.keys(), ...recentCloses])].map(coin => {
-        const my = a.get(coin);
-        const their = b.get(coin);
-        return [esc(coin), format(my, ae), format(their, be), my && their ? (Math.sign(my.size) === Math.sign(their.size) ? "同向" : "反向") : recentCloses.includes(coin) ? "对方近 7 天已平仓" : my ? "仅我持有" : "仅对方持有"];
+      if (!snapshots.some(data => data.positions)) { output.innerHTML = tip("所选钱包的仓位暂时无法读取，请重试。"); return; }
+      const complete = snapshots.every(data => data.positions);
+      const symbols = new Set(snapshots.flatMap(data => [...(data.positions?.keys() ?? []), ...data.closed]));
+      const rows = [...symbols].sort().flatMap(coin => {
+        const holdings = snapshots.map(data => data.positions?.get(coin));
+        const directions = new Set(holdings.filter(Boolean).map(row => Math.sign(row.size)));
+        const common = holdings.every(Boolean);
+        if (complete && ((compareFilter === "common" && !common) ||
+          (compareFilter === "different" && (common && directions.size === 1 || !directions.size)))) return [];
+        const cells = holdings.map((row, index) => {
+          const data = snapshots[index];
+          if (!data.positions) return "待更新";
+          if (!row) return data.closed.has(coin) ? "近 7 天已平仓" : "当前无仓";
+          return esc((row.size > 0 ? "多" : "空") + " " + quantity(Math.abs(row.size))) +
+            '<div class="subtle">' + esc("均价 " + money(row.entry) + " · 杠杆 " + ui.leverage(row.value, data.equity)) +
+            '</div><div class="subtle ' + ui.tone(row.pnl) + '">' + esc("浮盈亏 " + money(row.pnl, { signed: true })) + '</div>';
+        });
+        const relation = !complete ? "数据不全" : !directions.size ? "近 7 天平仓" :
+          directions.size > 1 ? "多空不同" : common ? "全部同向" : "部分持有";
+        return [[esc(coin), ...cells, relation]];
       });
-      output.innerHTML = table(["合约", walletName(mine), walletName(other), "方向差异"], rows);
+      output.innerHTML = (!complete ? '<p class="hint">部分仓位读取失败，已显示可用数据。</p>' : '') +
+        (snapshots.some(data => data.flowsMissing) ? '<p class="hint">部分钱包的近期平仓记录暂不可读。</p>' : '') +
+        (rows.length ? table(["合约", ...selected.map(walletName), "方向对比"], rows) : tip("当前筛选下没有可对比的仓位。"));
     }).catch(() => { if (output.isConnected && comparison.open) output.innerHTML = tip("仓位暂时无法读取，请稍后刷新。"); });
   }
 
@@ -448,7 +548,12 @@ export function setupWorkspace(ui) {
       panel('<h2>后台通知</h2><p class="hint" id="cloud-scan-note" aria-live="polite">正在读取云端检查状态…</p>' +
         '<p class="hint" id="push-delivery-note" aria-live="polite"></p><p class="hint" id="push-note">正在检查本机通知能力…</p><div id="push-controls" class="workspace-toolbar" hidden>' +
         button("push-enable", "开启本机通知") + button("push-test", "发测试通知") + button("push-disable", "关闭本机通知") + '</div><span id="push-feedback" class="status-inline" role="status"></span>') +
-      panel('<div class="inline-row"><h2>提醒记录</h2>' + button("reload-inbox", "刷新") + '</div><div id="alert-inbox">' + tip("正在读取…") + '</div>');
+      panel('<div class="inline-row"><h2>提醒记录</h2>' + button("reload-inbox", "刷新") + '</div>' +
+        '<div class="workspace-toolbar">' + field("提醒类型", '<select id="inbox-kind">' +
+          Object.entries(inboxLabels).map(([key, label]) => choose(key, inboxKind, label)).join("") + '</select>') +
+          check("inbox-unread", "on", inboxUnread, "只看未读") + '</div><div id="alert-inbox">' + tip("正在读取…") +
+        '</div><span id="inbox-feedback" class="status-inline" role="status"></span>' + button("inbox-more", "加载更多"));
+    $("inbox-more").hidden = true;
     updateNotificationPreview();
     refreshEquityLevels();
     refreshCloudHealth();
@@ -487,19 +592,71 @@ export function setupWorkspace(ui) {
     }
   }
 
-  async function inbox() {
+  function renderInbox(el) {
+    if (!inboxItems.length) {
+      el.innerHTML = tip(inboxUnread ? "这类提醒没有未读记录。" :
+        inboxKind !== "all" ? "暂无这类提醒。" : "暂无提醒。保存规则后，触发的消息会记录在这里。");
+    } else {
+      let currentDay;
+      const rows = inboxItems.map(item => {
+        const date = inboxDay.format(item.time);
+        const heading = date !== currentDay ? '<h3 class="inbox-date">' + esc(date) + '</h3>' : '';
+        currentDay = date;
+        const kind = inboxLabels[item.id.split(":", 1)[0]] ?? "提醒";
+        const receipt = item.readAt === null
+          ? ' <button class="quiet-link" type="button" data-inbox-id="' + esc(item.id) + '">标为已读</button>'
+          : ' <span class="subtle">已读</span>';
+        return heading + '<article class="inbox-item"><div class="inbox-meta"><time datetime="' + new Date(item.time).toISOString() + '">' +
+          esc(inboxClock.format(item.time)) + '</time><span class="tag">' + esc(kind) + '</span>' + receipt + '</div><div class="alert-body">' +
+          (item.title ? '<strong>' + esc(item.title) + '</strong><br>' : '') + esc(item.body) + '</div></article>';
+      });
+      el.innerHTML = rows.join("");
+    }
+    $("inbox-more").hidden = !inboxNext;
+  }
+
+  async function inbox({ append = false, automatic = false } = {}) {
     const el = $("alert-inbox");
-    if (!el) return;
+    if (!el || (automatic && (inboxExpanded || $("inbox-more").disabled || el.contains(document.activeElement))) ||
+        (append && !inboxNext)) return;
     if (!siteRuntime) { el.innerHTML = tip("请在同步版网页查看提醒记录。"); return; }
+    const token = ++inboxRequest;
+    const more = $("inbox-more");
+    more.disabled = true;
+    const query = new URLSearchParams({ kind: inboxKind });
+    if (inboxUnread) query.set("unread", "1");
+    if (append) {
+      query.set("before", inboxNext.time);
+      query.set("event", inboxNext.id);
+    }
     try {
-      const response = await request("/api/inbox");
-      if (!el.isConnected) return;
-      el.innerHTML = response.items.length ? '<div class="timeline">' + response.items.map(item =>
-        '<div class="timeline-row"><time>' + esc(formatting.format(item.time)) + '</time><div class="alert-body">' +
-        (item.title ? '<strong>' + esc(item.title) + '</strong><br>' : '') + esc(item.body) + '</div></div>').join("") + '</div>' :
-        tip("暂无提醒。先保存规则并开启本机通知。");
+      const response = await request("/api/inbox?" + query);
+      if (!el.isConnected || token !== inboxRequest) return;
+      inboxExpanded = append;
+      inboxNext = response.next;
+      inboxItems = append ? [...inboxItems, ...response.items] : response.items;
+      $("inbox-feedback").textContent = "";
+      renderInbox(el);
     } catch {
-      if (el.isConnected) el.innerHTML = tip("提醒记录暂时无法读取。");
+      if (el.isConnected && token === inboxRequest) $("inbox-feedback").textContent = "提醒记录暂时无法读取，请刷新重试。";
+    } finally {
+      if (token === inboxRequest) more.disabled = false;
+    }
+  }
+
+  async function markInbox(buttonNode) {
+    const el = $("alert-inbox");
+    buttonNode.disabled = true;
+    const id = buttonNode.dataset.inboxId;
+    try {
+      await request("/api/inbox/read", "PUT", { id });
+      if (!el.isConnected) return;
+      inboxItems = inboxUnread ? inboxItems.filter(item => item.id !== id) :
+        inboxItems.map(item => item.id === id ? { ...item, readAt: Date.now() } : item);
+      renderInbox(el);
+    } catch {
+      if (el.isConnected) $("inbox-feedback").textContent = "暂时无法标为已读，请重试。";
+      buttonNode.disabled = false;
     }
   }
 
@@ -530,7 +687,7 @@ export function setupWorkspace(ui) {
       pushConfig ||= await request("/api/push-config");
       if (!el.isConnected) return;
       if (!pushConfig.publicKey) { el.textContent = "推送服务暂未就绪。"; return; }
-      pushRegistration ||= await navigator.serviceWorker.register("/sw.js");
+      pushRegistration ||= (await ui.registration) ?? await navigator.serviceWorker.register("/sw.js");
       if (!el.isConnected) return;
       const subscription = await pushRegistration.pushManager.getSubscription();
       const status = subscription ? await request("/api/push-status", "POST", { endpoint: subscription.endpoint }) : {};
@@ -634,6 +791,7 @@ export function setupWorkspace(ui) {
       try { history.replaceState(null, "", location.pathname + location.search + (next === "over" ? "" : "#" + next)); } catch {}
     }
     render();
+    if (next === "over") ui.resumeOverview();
   }
 
   comparison.addEventListener("toggle", () => {
@@ -641,8 +799,11 @@ export function setupWorkspace(ui) {
     else if (active === "over" && !comparisonContent.hasChildNodes()) renderComparison();
   });
   comparisonContent.addEventListener("change", ({ target }) => {
-    if (target.id !== "compare-wallet") return;
-    compareAddress = target.value;
+    if (target.name === "compare-wallet") {
+      compareAddresses = [...comparisonContent.querySelectorAll('[name="compare-wallet"]:checked')].map(item => item.value).slice(0, 3);
+      ui.store("comparison-wallets", compareAddresses);
+    } else if (target.id === "compare-filter") compareFilter = target.value;
+    else return;
     renderComparison();
   });
   comparisonContent.addEventListener("click", event => {
@@ -655,6 +816,23 @@ export function setupWorkspace(ui) {
     const next = event.target.closest("button")?.dataset.view;
     if (next) show(next);
   });
+  $("wallet-prev").addEventListener("click", () => stepWallet(-1));
+  $("wallet-next").addEventListener("click", () => stepWallet(1));
+  document.addEventListener("hyper-wallet-changed", renderMobileWallet);
+  const swipe = $("wallet-swipe");
+  let swipeStart;
+  swipe.addEventListener("touchstart", event => {
+    swipeStart = event.touches.length === 1 ? event.touches[0] : null;
+  }, { passive: true });
+  swipe.addEventListener("touchend", event => {
+    if (!swipeStart || !event.changedTouches.length) return;
+    const touch = event.changedTouches[0];
+    const dx = touch.clientX - swipeStart.clientX;
+    const dy = touch.clientY - swipeStart.clientY;
+    swipeStart = null;
+    if (Math.abs(dx) >= 40 && Math.abs(dx) > 1.5 * Math.abs(dy)) stepWallet(dx < 0 ? 1 : -1);
+  }, { passive: true });
+  swipe.addEventListener("touchcancel", () => { swipeStart = null; });
   $("toggle-quick").addEventListener("click", () => {
     update({ ...profile, quick: !profile.quick });
     show("over");
@@ -662,12 +840,15 @@ export function setupWorkspace(ui) {
   viewRoot.addEventListener("click", event => {
     const selected = event.target.closest("button");
     if (!selected) return;
+    if (selected.dataset.inboxId) { markInbox(selected); return; }
     const address = selected.dataset.address;
     const action = selected.dataset.watchAction;
     if (action === "observe") { ui.observe(address); show("over"); }
     if (action === "edit") { editing = address; render(); $("watch-name").focus(); }
     if (action === "pin") update({ ...profile, wallets: profile.wallets.map(wallet =>
       wallet.address === address ? { ...wallet, pinned: !wallet.pinned } : wallet) });
+    if (action === "favorite") update({ ...profile, wallets: profile.wallets.map(wallet =>
+      wallet.address === address ? { ...wallet, favorite: !wallet.favorite } : wallet) });
 
     switch (selected.id) {
       case "goto-wallets": show("wallets"); break;
@@ -683,6 +864,7 @@ export function setupWorkspace(ui) {
       case "use-cloud": keepVersion(true); break;
       case "use-device": keepVersion(false); break;
       case "reload-inbox": inbox(); break;
+      case "inbox-more": inbox({ append: true }); break;
       case "push-enable": devicePush("enable"); break;
       case "push-disable": devicePush("disable"); break;
       case "push-test": devicePush("test"); break;
@@ -724,6 +906,16 @@ export function setupWorkspace(ui) {
       "leverage-threshold", ...Object.values(downsideInputIds)].includes(target.id)) updateNotificationPreview();
   });
   viewRoot.addEventListener("change", ({ target }) => {
+    if (target.name === "favorites-only") { favoritesOnly = target.checked; render(); return; }
+    if (target.id === "inbox-kind" || target.name === "inbox-unread") {
+      inboxKind = $("inbox-kind").value;
+      inboxUnread = viewRoot.querySelector('[name="inbox-unread"]').checked;
+      inboxNext = null;
+      $("alert-inbox").innerHTML = tip("正在读取…");
+      $("inbox-more").hidden = true;
+      inbox();
+      return;
+    }
     if (target.id === "notification-preview-type") previewType = target.value;
     if (target.name === "notification-field" || target.id === "notification-preview-type") {
       updateNotificationPreview();
@@ -755,7 +947,7 @@ export function setupWorkspace(ui) {
   const foregroundAlertInterval = 15000;
   let checkingAlerts = false;
   async function checkWhileOpen() {
-    if (!siteRuntime || document.hidden || dirty || checkingAlerts) return;
+    if (!siteRuntime || document.hidden || !navigator.onLine || dirty || checkingAlerts) return;
     const { actions, equity, loss, gap, equityChangeAlert, equityVolatility, leverageAlert } = profile.rules;
     const applies = (actions.length && profile.wallets.some(wallet => wallet.notify)) ||
       (own() && (equity || loss || gap || equityChangeAlert || equityVolatility || leverageAlert));
@@ -763,7 +955,7 @@ export function setupWorkspace(ui) {
     checkingAlerts = true;
     try {
       await request("/api/run-alerts", "POST");
-      if (active === "alerts") { inbox(); refreshEquityLevels(); }
+      if (active === "alerts") { inbox({ automatic: true }); refreshEquityLevels(); }
     } catch {
       // The next check retries through the same endpoint.
     } finally {
@@ -771,12 +963,12 @@ export function setupWorkspace(ui) {
     }
   }
   if (siteRuntime) setInterval(checkWhileOpen, foregroundAlertInterval);
-  setInterval(() => { if (!document.hidden && active === "wallets") loadCards(); }, 10000);
+  setInterval(() => { if (!document.hidden && navigator.onLine && active === "wallets") loadCards(); }, 10000);
   setInterval(() => {
-    if (document.hidden) return;
-    if (active === "activity") render();
+    if (document.hidden || !navigator.onLine) return;
+    if (active === "activity" && !viewRoot.contains(document.activeElement)) render();
     if (active === "over" && comparison.open && !comparisonContent.contains(document.activeElement)) renderComparison();
-    if (active === "alerts") { inbox(); refreshEquityLevels(); refreshCloudHealth(); refreshPushControls(); }
+    if (active === "alerts") { inbox({ automatic: true }); refreshEquityLevels(); refreshCloudHealth(); refreshPushControls(); }
   }, 45000);
-  return { refreshComparison: renderComparison };
+  return { refreshComparison: renderComparison, openWallets: () => { show("wallets"); $("watch-address").focus(); } };
 }

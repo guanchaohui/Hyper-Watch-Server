@@ -1,6 +1,6 @@
 import { createChart } from "./chart.js";
 import { setupWorkspace } from "./workspace.js";
-import { gapToLiquidation, periodPnl, portfolioBrief, portfolioPeriodPoints, positionLeverage } from "./analytics.js";
+import { filterPositions, gapToLiquidation, periodPnl, portfolioBrief, portfolioPeriodPoints, positionLeverage } from "./analytics.js";
 import { addressOf, connectPerps, demoData, info, parsePortfolio, parsePositions, parseSpot } from "./market.js";
 
 const $ = id => document.getElementById(id);
@@ -58,11 +58,14 @@ let masked = loadPreference("private", false) === true;
 let recents = loadPreference("recent", []);
 recents = Array.isArray(recents) ? recents.map(addressOf).filter(Boolean).slice(0, 4) : [];
 const pnlSummarySelect = $("pnl-summary-range");
-const savedPnlRange = loadPreference("pnl-summary-range", "day");
-if (["day", "today", "week", "month", "allTime"].includes(savedPnlRange)) pnlSummarySelect.value = savedPnlRange;
-const chinaTime = new Intl.DateTimeFormat("zh-CN", {
-  timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-});
+const legacyRange = loadPreference("pnl-summary-range", null);
+const savedPnlRange = loadPreference("overview-period", legacyRange === "day" ? "today" : legacyRange);
+pnlSummarySelect.value = ["day", "week", "month", "allTime"].includes(savedPnlRange) ? savedPnlRange : "today";
+const positionSort = $("position-sort");
+const positionLayout = $("position-layout");
+positionSort.value = loadPreference("position-sort", "notional");
+positionLayout.value = loadPreference("position-layout", "auto");
+let autoRefresh = loadPreference("auto-refresh", true) !== false;
 let period = pnlSummarySelect.value;
 let series = "equity";
 let tab = "positions";
@@ -117,6 +120,8 @@ function syncLayout() {
   $("privacy").setAttribute("aria-label", privacyLabel);
   $("privacy").setAttribute("aria-pressed", String(masked));
   $("privacy").title = privacyLabel;
+  $("mobile-privacy").textContent = privacyLabel;
+  $("mobile-privacy").setAttribute("aria-pressed", String(masked));
   setIcon($("privacy-icon"), masked ? "eyeOff" : "eye");
 }
 
@@ -125,8 +130,10 @@ function renderConnection() {
   const failed = Boolean(s.errors.size);
   const loading = s.requesting && !s.requestedAt;
   const streamLive = live(s);
-  const status = !s.user ? (s.demo ? "demo" : "idle") : failed ? "error" : loading ? "loading" : streamLive ? "live" : "poll";
-  const statusNames = { idle: "未选择钱包", demo: "演示数据", error: "更新异常", loading: "正在连接", live: "合约实时", poll: "定时刷新" };
+  const status = !s.user ? (s.demo ? "demo" : "idle") : !navigator.onLine ? "error" :
+    failed ? "error" : loading ? "loading" : streamLive ? "live" : autoRefresh ? "poll" : "paused";
+  const statusNames = { idle: "未选择钱包", demo: "演示数据", error: navigator.onLine ? "更新异常" : "网络离线",
+    loading: "正在连接", live: "合约实时", poll: "定时刷新", paused: "定时刷新已暂停" };
   $("status").dataset.state = status;
   if ($("status-label").textContent !== statusNames[status]) $("status-label").textContent = statusNames[status];
   $("refresh").disabled = s.requesting;
@@ -134,12 +141,17 @@ function renderConnection() {
   $("notice").hidden = !failed;
   const errors = [...s.errors].filter(key => key !== "positions" || !streamLive);
   const errorNames = { history: "账户权益", spot: "现货余额", positions: "合约持仓" };
-  $("notice-text").textContent = errors.length
+  $("notice-text").textContent = s.user && !navigator.onLine ? "网络离线，继续显示已获取的快照。" : errors.length
     ? `${errors.map(key => errorNames[key]).join("、")}暂时无法更新。已获取的数据会继续显示。` : "";
-  $("notice").hidden = !errors.length;
+  $("notice").hidden = !errors.length && !(s.user && !navigator.onLine);
+  $("retry").hidden = !navigator.onLine;
   if ($("details-dialog").open) renderDiagnostics();
-  const freshness = !s.user ? (s.demo ? "当前为演示数据" : "请选择钱包") : s.requestedAt ? "API 最近刷新 " + clock.format(s.requestedAt) : "等待 Hyperliquid 返回数据";
+  const freshness = !s.user ? (s.demo ? "当前为演示数据" : "请选择钱包") :
+    s.requestedAt ? "API 最近成功 " + clock.format(s.requestedAt) : "等待 Hyperliquid 返回数据";
   $("footer-update").textContent = freshness;
+  $("auto-refresh").hidden = !s.user;
+  $("auto-refresh").textContent = autoRefresh ? "暂停定时刷新" : "恢复定时刷新";
+  $("auto-refresh").setAttribute("aria-pressed", String(!autoRefresh));
   const holdingInfo = !s.user ? (s.demo ? (tab === "positions" ? "演示持仓" : "演示余额") : "未选择钱包") :
     tab === "spot" ? (s.errors.has("spot") ? "更新异常" : s.spot ? "定时刷新" : "等待余额") :
     streamLive ? "实时更新" : s.errors.has("positions") ? "更新异常" : s.positions ? (s.scope === "all" ? "上次快照" : "默认市场快照") : "等待持仓";
@@ -166,8 +178,9 @@ function renderMetrics() {
   change.hidden = !Number.isFinite(relative);
   change.textContent = percent(relative, true);
   change.className = "change " + tone(relative);
-  $("daily-note").textContent = summary && range === "today"
-    ? chinaTime.format(summary.start) + " 样本起算"
+  $("daily-note").textContent = range === "today"
+    ? summary ? "00:00 UTC+8 起算" + (summary.estimated ? " · 估算" : "") :
+      s.history ? "等待 UTC+8 零点附近的盈亏样本" : "从 00:00 UTC+8 起算"
     : change.hidden ? "按盈亏历史样本计算" : "相对期初权益";
   $("equity-note").textContent = s.user && last ? "样本时间 " + time.format(last[0]) : "Hyperliquid 账户估值";
   $("floating-note").textContent = s.user && s.scope === "main" ? "默认市场的合约持仓" : "当前合约持仓的浮动盈亏";
@@ -195,7 +208,8 @@ function renderChart() {
   const s = session;
   const points = portfolioPeriodPoints(s.history, period, series);
   const emptyText = s.errors.has("history") ? "暂时无法读取账户历史" :
-    s.history ? "该时段暂无历史数据" : s.user ? "正在读取账户历史…" : "选择钱包后查看账户历史";
+    s.history ? (period === "today" ? "缺少 UTC+8 零点附近的样本或盘中数据" : "该时段暂无历史数据") :
+      s.user ? "正在读取账户历史…" : "选择钱包后查看账户历史";
   drawChart({ points, series, period, masked, emptyText });
 }
 
@@ -270,12 +284,18 @@ function renderHoldings() {
   $("spot-count").textContent = s.spot?.length ?? "—";
   const body = $("holdings-body");
   const spot = tab === "spot";
-  const list = spot ? s.spot : s.positions;
+  const raw = spot ? s.spot : s.positions;
+  const list = spot || !raw ? raw : filterPositions(raw, {
+    query: $("position-search").value, side: $("position-side").value, sort: positionSort.value,
+  });
+  $("holdings-tools").hidden = spot || !raw?.length;
+  body.dataset.layout = spot ? "auto" : positionLayout.value || "auto";
 
   if (!list?.length) {
     const type = spot ? "现货余额" : "合约持仓";
     const missing = s.errors.has(tab);
     const message = !s.user && !s.demo ? "选择钱包后查看" + type : missing ? type + "暂时无法更新" :
+      raw?.length ? "没有匹配的合约，试试清空搜索或调整方向。" :
       list ? "当前暂无" + (!spot && s.scope === "main" ? "默认市场" : "") + type : "正在读取" + type + "…";
     body.replaceChildren(element("div", "empty-holdings", message));
     return;
@@ -339,6 +359,9 @@ function renderHoldings() {
 }
 
 function renderAll() {
+  const empty = !session.user && !session.demo;
+  $("dashboard-empty").hidden = !empty;
+  for (const pane of document.querySelectorAll("[data-wallet-detail]")) pane.hidden = empty;
   syncLayout();
   renderMetrics();
   renderExposure();
@@ -379,6 +402,7 @@ async function refresh(s = session) {
     } catch (error) {
       if (session !== s || (key === "positions" && live(s))) return;
       s.errors.add(key);
+      if (!error.retryAt) error.retryAt = Date.now() + (s.problems.has(key) ? 30_000 : 8_000);
       s.problems.set(key, error);
     }
   }));
@@ -412,13 +436,14 @@ function openAccount(user, demo = false) {
       if (session !== s) return;
       s.streamAt = 0;
       renderConnection();
-      if (!document.hidden && !s.requesting && s.requestedAt) refresh(s);
+      if (autoRefresh && navigator.onLine && !document.hidden && !$("dashboard").hidden && !s.requesting && s.requestedAt) refresh(s);
     });
   } else if (demo) {
     Object.assign(s, demoData());
   }
   savePreference("wallet", user);
   renderAll();
+  document.dispatchEvent(new Event("hyper-wallet-changed"));
   if (user) refresh(s);
 }
 
@@ -431,10 +456,10 @@ function registerChoice(group, prop, update) {
   });
 }
 
-function changeOverviewRange(value) {
+function changeOverviewRange(value, persist = true) {
   period = value;
   pnlSummarySelect.value = value;
-  savePreference("pnl-summary-range", value);
+  if (persist) savePreference("overview-period", value);
   for (const button of $("periods").querySelectorAll("button")) {
     button.setAttribute("aria-pressed", String(button.dataset.period === value));
   }
@@ -445,6 +470,11 @@ function changeOverviewRange(value) {
 registerChoice("periods", "period", changeOverviewRange);
 registerChoice("series", "series", value => { series = value; renderChart(); });
 registerChoice("holdings-tabs", "tab", value => { tab = value; renderHoldings(); renderConnection(); });
+$("position-search").addEventListener("input", renderHoldings);
+$("position-side").addEventListener("change", renderHoldings);
+for (const control of [positionSort, positionLayout]) {
+  control.addEventListener("change", () => { savePreference(control.id, control.value); renderHoldings(); });
+}
 
 const dialog = $("wallet-dialog");
 const input = $("wallet-input");
@@ -512,17 +542,25 @@ input.addEventListener("keydown", event => {
 });
 input.addEventListener("input", () => reportAddressError(false));
 pnlSummarySelect.addEventListener("change", () => changeOverviewRange(pnlSummarySelect.value));
-$("privacy").addEventListener("click", () => {
+function togglePrivacy() {
   masked = !masked;
   savePreference("private", masked);
   renderAll();
   workspace.refreshComparison();
-});
+}
+$("privacy").addEventListener("click", togglePrivacy);
+$("mobile-privacy").addEventListener("click", togglePrivacy);
 $("refresh").addEventListener("click", () => {
   if (session.user) refresh();
   else if (session.demo) { Object.assign(session, demoData()); renderAll(); }
 });
 $("retry").addEventListener("click", () => refresh());
+$("auto-refresh").addEventListener("click", () => {
+  autoRefresh = !autoRefresh;
+  savePreference("auto-refresh", autoRefresh);
+  renderConnection();
+  if (autoRefresh && navigator.onLine) refresh();
+});
 
 function connectionMessage(error) {
   if (!error) return "";
@@ -537,7 +575,7 @@ function renderDiagnostics() {
   const s = session;
   const content = $("details-content");
   if (!s.user) {
-    content.replaceChildren(element("p", "hint", "当前为演示数据。添加公开钱包后可检查三类接口。"));
+    content.replaceChildren(element("p", "hint", s.demo ? "当前为演示数据。" : "添加公开钱包后可检查三类接口。"));
     return;
   }
   const list = element("ul", "diagnostics-list");
@@ -546,7 +584,8 @@ function renderDiagnostics() {
     const row = element("li");
     const requestTime = s.times.get(key);
     const error = connectionMessage(s.problems.get(key));
-    const status = error || (!requestTime ? "等待返回" : s.requesting ? "正在更新" : "最近一次读取成功");
+    const status = error || (!requestTime ? "等待返回" : s.requesting ? "正在更新" :
+      Date.now() - requestTime > 30_000 ? "使用较早的快照" : "数据正常");
     row.append(element("strong", "", name + " · " + status),
       element("small", "", requestTime ? "最后成功 " + time.format(requestTime) : "暂无成功时间"));
     list.append(row);
@@ -562,15 +601,50 @@ $("diagnostics").addEventListener("click", () => {
 $("close-details").addEventListener("click", () => $("details-dialog").close());
 
 openAccount(addressOf(loadPreference("wallet", "")));
-changeOverviewRange(period);
+changeOverviewRange(period, false);
+const registration = account && "serviceWorker" in navigator ? navigator.serviceWorker.register("/sw.js").catch(() => null) : null;
 const workspace = setupWorkspace({
   session: () => session,
   observe: openAccount,
   amount, quantity, percent, tone, leverage,
-  load: loadPreference, store: savePreference,
+  load: loadPreference, store: savePreference, registration,
+  resumeOverview: () => { if (autoRefresh && navigator.onLine && Date.now() - session.requestedAt > pollEvery) refresh(); },
 });
-setInterval(() => { if (!document.hidden) refresh(); }, pollEvery);
+$("onboarding-wallet").addEventListener("click", () => workspace.openWallets());
+$("onboarding-demo").addEventListener("click", () => selectAddress(""));
+const refreshVisible = () => {
+  if (!document.hidden && !$("dashboard").hidden && autoRefresh && navigator.onLine) refresh();
+};
+setInterval(refreshVisible, pollEvery);
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && Date.now() - session.requestedAt > 5000) refresh();
+  if (Date.now() - session.requestedAt > pollEvery) refreshVisible();
 });
-window.addEventListener("online", () => refresh());
+window.addEventListener("offline", renderConnection);
+window.addEventListener("online", () => { renderConnection(); refreshVisible(); });
+
+let installPrompt;
+const standalone = matchMedia("(display-mode: standalone)");
+const installButton = $("install-app");
+const installHelp = $("install-help");
+function updateInstall() {
+  installButton.hidden = !registration || standalone.matches || navigator.standalone === true;
+  if (installButton.hidden) installHelp.hidden = true;
+}
+window.addEventListener("beforeinstallprompt", event => {
+  event.preventDefault();
+  installPrompt = event;
+  updateInstall();
+});
+window.addEventListener("appinstalled", () => { installPrompt = null; installButton.hidden = true; installHelp.hidden = true; });
+standalone.addEventListener("change", updateInstall);
+installButton.addEventListener("click", async () => {
+  if (installPrompt) {
+    const prompt = installPrompt;
+    installPrompt = null;
+    try { await prompt.prompt(); return; } catch {}
+  }
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  installHelp.textContent = ios ? "在 Safari 点「分享」，再选「添加到主屏幕」。" : "打开浏览器菜单，选择「安装应用」或「添加到主屏幕」。";
+  installHelp.hidden = !installHelp.hidden;
+});
+updateInstall();
