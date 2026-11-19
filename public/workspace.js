@@ -46,6 +46,7 @@ function table(columns, rows) {
 }
 
 export function setupWorkspace(ui) {
+  const dashboard = $("dashboard");
   const viewRoot = $("workspace-view");
   const mobileTabs = $("mobile-tabs");
   const mobileViews = [...mobileTabs.querySelectorAll("[data-view]")].map(button => button.dataset.view);
@@ -857,8 +858,8 @@ export function setupWorkspace(ui) {
   function render() {
     const token = ++sequence;
     const dashboardView = active === "over" || active === "positions";
-    $("dashboard").hidden = !dashboardView;
-    $("dashboard").dataset.section = active;
+    dashboard.hidden = !dashboardView;
+    dashboard.dataset.section = active;
     ui.syncOverview();
     $("page-title").textContent = active === "positions" ? "持仓" : "钱包总览";
     $("mobile-shortcuts").hidden = !dashboardView;
@@ -869,7 +870,50 @@ export function setupWorkspace(ui) {
     syncStatus();
   }
 
-  function show(next, changeHash = true) {
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+  const visiblePage = () => dashboard.hidden ? viewRoot : dashboard;
+  const mobileIndex = view => mobileViews.indexOf(mobileViewOf(view));
+  let pageAnimation;
+  let draggedPage;
+  let dragOffset = 0;
+
+  function clearPageMotion() {
+    pageAnimation?.cancel();
+    pageAnimation = null;
+    draggedPage?.style.removeProperty("transform");
+    draggedPage = null;
+    dragOffset = 0;
+  }
+
+  function slidePage(offset, opacity = 1, duration = 240) {
+    if (reducedMotion.matches) return;
+    pageAnimation = visiblePage().animate([
+      { transform: `translateX(${offset}px)`, opacity },
+      { transform: "translateX(0)", opacity: 1 },
+    ], { duration, easing: "cubic-bezier(.22, .75, .25, 1)", fill: "backwards" });
+  }
+
+  function previewPageSwipe(distance) {
+    if (distance === null) {
+      if (!draggedPage) return;
+      const offset = dragOffset;
+      clearPageMotion();
+      slidePage(offset, 1, 160);
+      return;
+    }
+    if (reducedMotion.matches) return;
+    if (!draggedPage) {
+      clearPageMotion();
+      draggedPage = visiblePage();
+    }
+    const direction = distance < 0 ? 1 : -1;
+    const adjacent = mobileViews[mobileIndex(active) + direction];
+    dragOffset = Math.sign(distance) * Math.min(adjacent ? 72 : 16, Math.abs(distance) * (adjacent ? .55 : .22));
+    draggedPage.style.transform = `translateX(${dragOffset}px)`;
+  }
+  reducedMotion.addEventListener("change", clearPageMotion);
+
+  function show(next, changeHash = true, animate = false) {
     if (next === "compare") {
       comparison.open = true;
       next = "over";
@@ -877,6 +921,8 @@ export function setupWorkspace(ui) {
     }
     if (!["over", "positions", "wallets", "activity", "pnl", "alerts", "mine"].includes(next)) next = "over";
     const changed = active !== next;
+    const slideDirection = animate ? Math.sign(mobileIndex(next) - mobileIndex(active)) : 0;
+    clearPageMotion();
     active = next;
     const desktopView = next === "positions" ? "over" : next === "mine" ? "wallets" : next;
     const mobileView = mobileViewOf(next);
@@ -891,6 +937,7 @@ export function setupWorkspace(ui) {
     if (changed) window.scrollTo(0, 0);
     render();
     if (next === "over" || next === "positions") ui.resumeOverview();
+    if (slideDirection) slidePage(slideDirection * 72, .48);
   }
 
   comparison.addEventListener("toggle", () => {
@@ -914,7 +961,8 @@ export function setupWorkspace(ui) {
   for (const nav of [$("workspace-tabs"), mobileTabs]) {
     nav.addEventListener("click", event => {
       const next = event.target.closest("button")?.dataset.view;
-      if (next) show(next === "activity" && nav === mobileTabs && active === "pnl" ? "pnl" : next);
+      const onMobile = nav === mobileTabs;
+      if (next) show(next === "activity" && onMobile && active === "pnl" ? "pnl" : next, true, onMobile);
     });
   }
   enablePageSwipe(document.body, {
@@ -925,10 +973,12 @@ export function setupWorkspace(ui) {
       return (target === document.body || target.closest("#dashboard, #workspace-view")) &&
         !target.closest(swipeContentExclusions);
     },
+    preview: previewPageSwipe,
     move(direction) {
-      const next = mobileViews[mobileViews.indexOf(mobileViewOf(active)) + direction];
-      if (!next) return;
-      show(next);
+      const next = mobileViews[mobileIndex(active) + direction];
+      if (!next) return false;
+      show(next, true, true);
+      return true;
     },
   });
   $("wallet-prev").addEventListener("click", () => stepWallet(-1));
