@@ -123,16 +123,24 @@ export function walletName(wallet) {
   return wallet.name || wallet.address.slice(0, 6) + "…" + wallet.address.slice(-4);
 }
 
+export function fillIdentity(row) {
+  return String(row.tid ?? [row.hash, row.oid, row.time, row.coin, row.sz, row.startPosition].join(":"));
+}
+
+export function isPerpCoin(coin) {
+  return typeof coin === "string" && Boolean(coin) && !coin.startsWith("@") && !coin.includes("/");
+}
+
 function normalizeFill(row) {
   const time = numberOf(row?.time);
   const price = numberOf(row?.px);
   const size = numberOf(row?.sz);
   const start = numberOf(row?.startPosition);
   const signed = row?.side === "B" ? size : row?.side === "A" ? -size : 0;
-  if (typeof row?.coin !== "string" || row.coin.startsWith("@") || row.coin.includes("/") ||
+  if (!isPerpCoin(row?.coin) ||
     !/^(Open |Close |Long >|Short >|Buy |Sell |Auto-Deleveraging|Liquidated)/i.test(row.dir ?? "") ||
     start === null || !(time > 0) || !(price > 0) || !(size > 0) || !signed) return null;
-  const id = String(row.tid ?? [row.hash, row.oid, row.time, row.coin, row.sz, row.startPosition].join(":"));
+  const id = fillIdentity(row);
   return { coin: row.coin, id, order: row.oid, time, price, size, start, delta: signed, closedPnl: numberOf(row.closedPnl) };
 }
 
@@ -285,7 +293,27 @@ export function tradingActivity(changes) {
 
 export function gapToLiquidation(row) {
   if (!(row?.mark > 0) || !(row?.liquidation > 0)) return null;
-  return Math.max(0, (row.size > 0 ? row.mark - row.liquidation : row.liquidation - row.mark) / row.mark * 100);
+  const distance = (row.size > 0 ? row.mark - row.liquidation : row.liquidation - row.mark) / row.mark * 100;
+  return Number.isFinite(distance) ? Math.max(0, distance) : null;
+}
+
+export function positionRiskSummary(positions, { complete = false, fresh = false } = {}) {
+  let closest = null;
+  const rows = positions ?? [];
+  for (const row of rows) {
+    const gap = gapToLiquidation(row);
+    if (gap !== null && (closest === null || gap < closest.gap)) closest = { row, gap };
+  }
+  const sum = key => positions && rows.every(row => Number.isFinite(row[key]) && row[key] >= 0)
+    ? rows.reduce((total, row) => total + row[key], 0) : null;
+  const gapsComplete = Boolean(positions && complete && rows.every(row => gapToLiquidation(row) !== null));
+  let level = "unknown";
+  if (fresh && positions) {
+    if (closest?.gap <= 5) level = "critical";
+    else if (closest?.gap <= 15) level = "watch";
+    else if (gapsComplete) level = rows.length ? "low" : "flat";
+  }
+  return { level, closest, complete: gapsComplete, notional: sum("value"), margin: sum("margin") };
 }
 
 export function cashMovements(ledger) {

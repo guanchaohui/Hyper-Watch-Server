@@ -41,7 +41,8 @@ export function parsePositions(states) {
   }
   return states.flatMap(([dex, state]) => state.assetPositions.flatMap(({ position }) => {
     const size = numberOf(position?.szi);
-    if (!position?.coin || !size) return [];
+    if (size === 0) return [];
+    if (size === null || typeof position?.coin !== "string" || !position.coin) throw new Error("Invalid position row");
     const value = numberOf(position.positionValue);
     return [{
       coin: position.coin,

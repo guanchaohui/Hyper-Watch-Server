@@ -1,6 +1,7 @@
 import { createChart } from "./chart.js";
 import { setupWorkspace } from "./workspace.js";
-import { filterPositions, gapToLiquidation, periodPnl, portfolioBrief, portfolioPeriodPoints, positionLeverage } from "./analytics.js";
+import { filterPositions, gapToLiquidation, periodPnl, portfolioBrief, portfolioPeriodPoints, positionLeverage,
+  positionRiskSummary, utc8DayStart } from "./analytics.js";
 import { addressOf, connectPerps, demoData, info, parsePortfolio, parsePositions, parseSpot } from "./market.js";
 
 const $ = id => document.getElementById(id);
@@ -42,6 +43,8 @@ if (account) {
   });
 }
 const pollEvery = 5000;
+const activityEvery = 60_000;
+const positionStaleAfter = 45_000;
 const mask = "••••••";
 const drawChart = createChart($("chart"), $("chart-empty"), $("chart-tooltip"), $("tooltip-time"), $("tooltip-value"));
 
@@ -157,7 +160,11 @@ function renderConnection() {
     streamLive ? "实时更新" : s.errors.has("positions") ? "更新异常" : s.positions ? (s.scope === "all" ? "上次快照" : "默认市场快照") : "等待持仓";
   $("holding-info").dataset.stream = tab === "positions" && streamLive ? "live" : "";
   $("holding-info-text").textContent = holdingInfo;
+  renderRiskCockpit();
 }
+
+const todayNote = (summary, history) => summary ? "00:00 UTC+8 起算" + (summary.estimated ? " · 估算" : "") :
+  history ? "缺少 UTC+8 零点附近样本" : "从 00:00 UTC+8 起算";
 
 function renderMetrics() {
   const s = session;
@@ -166,6 +173,7 @@ function renderMetrics() {
   const last = equity.at(-1);
   const range = pnlSummarySelect.value;
   const summary = periodPnl(s.history, range);
+  const today = range === "today" ? summary : periodPnl(s.history, "today");
   const daily = summary?.pnl ?? null;
   const first = summary?.equity;
   const pos = s.positions;
@@ -173,17 +181,95 @@ function renderMetrics() {
   setNumber("equity", last?.[1]);
   setNumber("daily", daily, { signed: true });
   setNumber("floating", unrealized, { signed: true });
+  $("range-label").textContent = range === "today" ? "今日净盈亏" : "区间盈亏";
+  $("today-pinned").hidden = range === "today";
+  setNumber("today-net", today?.pnl ?? null, { signed: true });
+  $("today-net-note").textContent = todayNote(today, s.history);
+  renderRealized();
   const change = $("daily-percent");
   const relative = daily !== null && first > 0 && !masked ? daily / first * 100 : null;
   change.hidden = !Number.isFinite(relative);
   change.textContent = percent(relative, true);
   change.className = "change " + tone(relative);
   $("daily-note").textContent = range === "today"
-    ? summary ? "00:00 UTC+8 起算" + (summary.estimated ? " · 估算" : "") :
-      s.history ? "等待 UTC+8 零点附近的盈亏样本" : "从 00:00 UTC+8 起算"
+    ? todayNote(summary, s.history)
     : change.hidden ? "按盈亏历史样本计算" : "相对期初权益";
   $("equity-note").textContent = s.user && last ? "样本时间 " + time.format(last[0]) : "Hyperliquid 账户估值";
   $("floating-note").textContent = s.user && s.scope === "main" ? "默认市场的合约持仓" : "当前合约持仓的浮动盈亏";
+}
+
+function renderRealized() {
+  const { activity, activityError, demo } = session;
+  const today = activity?.todayStart === utc8DayStart() ? activity : null;
+  const status = today?.fillsState;
+  setNumber("realized-today", today?.realized ?? null, { signed: true });
+  $("realized-note").textContent = demo ? "演示模式" : activityError ? "上次读取 · 正在重试" :
+    status === "ready" ? "UTC+8 · 合约成交 · " + clock.format(today.asOf) :
+    status === "limited" ? "成交覆盖需分页核对" : status === "incomplete" ? "成交数据不完整" :
+    status === "unavailable" ? "成交暂不可用" : "UTC+8 · 等待成交数据";
+}
+
+const positionKey = row => JSON.stringify([row.dex, row.coin]);
+
+function riskDistance(gap) {
+  if (!Number.isFinite(gap)) return "—";
+  if (masked) return "•••";
+  return gap > 0 && gap < 0.01 ? "<0.01%" : gap.toFixed(2) + "%";
+}
+
+function renderRiskCockpit() {
+  const s = session;
+  const observed = s.times.get("positions");
+  const fresh = s.demo || (navigator.onLine && observed && Date.now() - observed <= positionStaleAfter && !s.errors.has("positions"));
+  const risk = positionRiskSummary(s.positions, { complete: s.scope === "all" || s.demo, fresh });
+  const level = $("risk-level");
+  const labels = { critical: "高风险", watch: "需关注", low: "低风险", flat: "无持仓", unknown: "待评估" };
+  level.dataset.level = risk.level;
+  if (level.textContent !== labels[risk.level]) level.textContent = labels[risk.level];
+  const source = s.demo ? "演示数据" : !s.positions ? (s.errors.has("positions") || !navigator.onLine ? "仓位暂不可用" : "等待仓位数据") :
+    !fresh ? "仓位数据延迟 · 显示上次快照" : s.scope === "main" ?
+      "仅默认市场 · " + clock.format(observed) : "全部永续市场 · " + clock.format(observed);
+  $("risk-coverage").textContent = source + (fresh && s.positions?.length && !risk.complete && s.scope !== "main" ? " · 部分强平数据缺失" : "");
+  setNumber("risk-notional", risk.notional);
+  setNumber("risk-margin", risk.margin);
+  const closest = fresh ? risk.closest : null;
+  $("risk-closest").hidden = !closest;
+  $("risk-closest-link").dataset.position = closest ? positionKey(closest.row) : "";
+  if (!closest) return;
+  const { row, gap } = closest;
+  $("risk-closest-name").textContent = row.coin + " · " + (row.size > 0 ? "多仓" : "空仓");
+  $("risk-closest-gap").textContent = riskDistance(gap);
+}
+
+function renderRecentEvents() {
+  const { activity, activityError, demo } = session;
+  const list = $("account-event-list");
+  const empty = $("account-events-empty");
+  const complete = activity?.fillsState === "ready" && activity?.ledgerState === "ready";
+  $("account-events-status").textContent = demo ? "演示模式" : activityError || !navigator.onLine ? "事件更新延迟" : activity ?
+    "近 24 小时 · " + (complete ? "更新于 " + clock.format(activity.asOf) : "部分数据可用") : "等待账户事件";
+  list.hidden = !activity?.events.length;
+  empty.hidden = !list.hidden;
+  empty.textContent = demo ? "切换到已保存的钱包查看活动。" : complete ? "近 24 小时暂无重要事件。" : "暂未读取到可展示的账户事件。";
+  const labels = { open: "开仓", close: "平仓", reverse: "反手", deposit: "入金", withdraw: "出金",
+    risk: "仓位风险提醒", equity: "权益提醒", leverage: "总杠杆提醒" };
+  list.replaceChildren(...(activity?.events ?? []).map(event => {
+    const item = element("li", "account-event");
+    const label = event.coin ? event.coin + " · " + labels[event.type] + (event.side === "long" ? "多" : "空") : labels[event.type];
+    const when = element("time", "", time.format(event.time));
+    when.dateTime = new Date(event.time).toISOString();
+    item.append(element("strong", "", label), when);
+    if (Number.isFinite(event.amount)) {
+      const movement = event.type === "deposit" || event.type === "withdraw";
+      const value = amount(event.type === "withdraw" ? -event.amount : event.amount, { signed: movement });
+      item.append(element("span", "account-event-amount", value));
+    } else {
+      const link = element("a", "quiet-link", "提醒记录");
+      link.href = "/#alerts";
+      item.append(link);
+    }
+    return item;
+  }));
 }
 
 function renderExposure() {
@@ -257,7 +343,7 @@ function positionRisk(row, equity) {
     ["保证金占用", amount(row.margin)],
     ["仓位杠杆率", leverage(row.value, equity)],
     ["预估强平价格", amount(row.liquidation), limit],
-    ["距离强平还剩", percent(gap), limit],
+    ["距离强平还剩", riskDistance(gap), limit],
   ];
 }
 
@@ -336,6 +422,8 @@ function renderHoldings() {
     });
     card.append(top, fields);
     if (!spot) {
+      tr.dataset.position = card.dataset.position = positionKey(row);
+      tr.tabIndex = card.tabIndex = -1;
       const risk = positionRisk(row, equity);
       const detail = rows.insertRow();
       detail.className = "position-risk-row";
@@ -379,6 +467,7 @@ function renderPositions() {
 
 async function refresh(s = session) {
   if (!s.user || s.requesting || session !== s) return;
+  refreshOverviewActivity(s);
   s.requesting = true;
   renderConnection();
 
@@ -411,6 +500,28 @@ async function refresh(s = session) {
   renderAll();
 }
 
+async function refreshOverviewActivity(s) {
+  if (!account || s.activityPending || Date.now() < s.activityNext) return;
+  s.activityPending = true;
+  s.activityNext = Date.now() + activityEvery;
+  try {
+    const response = await fetch("/api/overview-activity?" + new URLSearchParams({ wallet: s.user }), {
+      headers: { "X-Hyper-Account": account }, cache: "no-store", credentials: "same-origin", signal: s.controller.signal,
+    });
+    if (!response.ok) throw new Error("Overview activity unavailable");
+    s.activity = await response.json();
+    s.activityError = false;
+  } catch {
+    s.activityError = true;
+  } finally {
+    s.activityPending = false;
+    if (s === session) {
+      renderRealized();
+      renderRecentEvents();
+    }
+  }
+}
+
 function openAccount(user, demo = false) {
   if (session) {
     session.controller.abort();
@@ -419,6 +530,7 @@ function openAccount(user, demo = false) {
   const s = {
     user, demo, controller: new AbortController(), errors: new Set(),
     history: null, positions: null, spot: null, requestedAt: 0, requesting: false,
+    activity: null, activityNext: 0, activityPending: false, activityError: false,
     disconnect: null, streamAt: 0, scope: "", times: new Map(), problems: new Map(),
   };
   session = s;
@@ -443,6 +555,7 @@ function openAccount(user, demo = false) {
   }
   savePreference("wallet", user);
   renderAll();
+  renderRecentEvents();
   document.dispatchEvent(new Event("hyper-wallet-changed"));
   if (user) refresh(s);
 }
@@ -470,6 +583,19 @@ function changeOverviewRange(value, persist = true) {
 registerChoice("periods", "period", changeOverviewRange);
 registerChoice("series", "series", value => { series = value; renderChart(); });
 registerChoice("holdings-tabs", "tab", value => { tab = value; renderHoldings(); renderConnection(); });
+$("risk-closest-link").addEventListener("click", ({ currentTarget }) => {
+  const key = currentTarget.dataset.position;
+  if (!key) return;
+  $("position-search").value = "";
+  $("position-side").value = "all";
+  $("holdings-tabs").querySelector('[data-tab="positions"]').click();
+  const target = [...$("holdings-body").querySelectorAll("[data-position]")]
+    .find(node => node.dataset.position === key && node.getClientRects().length);
+  if (target) {
+    target.focus({ preventScroll: true });
+    target.scrollIntoView({ block: "center" });
+  }
+});
 $("position-search").addEventListener("input", renderHoldings);
 $("position-side").addEventListener("change", renderHoldings);
 for (const control of [positionSort, positionLayout]) {
@@ -546,12 +672,13 @@ function togglePrivacy() {
   masked = !masked;
   savePreference("private", masked);
   renderAll();
+  renderRecentEvents();
   workspace.refreshComparison();
 }
 $("privacy").addEventListener("click", togglePrivacy);
 $("mobile-privacy").addEventListener("click", togglePrivacy);
 $("refresh").addEventListener("click", () => {
-  if (session.user) refresh();
+  if (session.user) { session.activityNext = 0; refresh(); }
   else if (session.demo) { Object.assign(session, demoData()); renderAll(); }
 });
 $("retry").addEventListener("click", () => refresh());
@@ -615,12 +742,15 @@ $("onboarding-demo").addEventListener("click", () => selectAddress(""));
 const refreshVisible = () => {
   if (!document.hidden && !$("dashboard").hidden && autoRefresh && navigator.onLine) refresh();
 };
-setInterval(refreshVisible, pollEvery);
+setInterval(() => {
+  if (!autoRefresh && !document.hidden && !$("dashboard").hidden) renderRiskCockpit();
+  refreshVisible();
+}, pollEvery);
 document.addEventListener("visibilitychange", () => {
   if (Date.now() - session.requestedAt > pollEvery) refreshVisible();
 });
-window.addEventListener("offline", renderConnection);
-window.addEventListener("online", () => { renderConnection(); refreshVisible(); });
+window.addEventListener("offline", () => { renderConnection(); renderRecentEvents(); });
+window.addEventListener("online", () => { renderConnection(); renderRecentEvents(); refreshVisible(); });
 
 let installPrompt;
 const standalone = matchMedia("(display-mode: standalone)");
