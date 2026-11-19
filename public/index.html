@@ -94,8 +94,13 @@
         <div class="metric-number" id="equity">—</div>
         <div class="metric-foot" id="equity-note">Hyperliquid 账户估值</div>
       </article>
+      <article class="metric" id="today-pinned" hidden>
+        <div class="metric-top"><h2>今日净盈亏</h2></div>
+        <div class="metric-number" id="today-net">—</div>
+        <div class="metric-foot" id="today-net-note"></div>
+      </article>
       <article class="metric">
-        <div class="metric-top"><h2><span class="icon metric-icon" data-icon="trend" aria-hidden="true"></span>区间盈亏</h2>
+        <div class="metric-top"><h2><span class="icon metric-icon" data-icon="trend" aria-hidden="true"></span><span id="range-label">今日净盈亏</span></h2>
           <select class="metric-range" id="pnl-summary-range" aria-label="概览盈亏区间">
             <option value="today" selected>今日 UTC+8</option>
             <option value="day">近 24 小时</option>
@@ -112,6 +117,30 @@
         <div class="metric-number" id="floating">—</div>
         <div class="metric-foot" id="floating-note">当前合约持仓的浮动盈亏</div>
       </article>
+      <article class="metric realized-metric">
+        <div class="metric-top"><h2>今日已实现盈亏</h2></div>
+        <div class="metric-number" id="realized-today">—</div>
+        <div class="metric-foot" id="realized-note">UTC+8 · 合约成交</div>
+      </article>
+    </section>
+
+    <section class="panel risk-cockpit" id="risk-cockpit" aria-labelledby="risk-title" data-wallet-detail>
+      <div class="risk-cockpit-head">
+        <div><h2 id="risk-title">仓位风险</h2><p id="risk-coverage" class="hint"></p></div>
+        <span class="risk-pill" id="risk-level" data-level="unknown" role="status">等待仓位</span>
+      </div>
+      <dl class="risk-cockpit-totals">
+        <div><dt>总仓位价值</dt><dd id="risk-notional">—</dd></div>
+        <div><dt>合约保证金占用</dt><dd id="risk-margin">—</dd></div>
+      </dl>
+      <div class="risk-cockpit-closest" id="risk-closest" hidden>
+        <div><small>最接近强平</small><strong id="risk-closest-name"></strong></div>
+        <div><small>距离强平</small><strong id="risk-closest-gap"></strong></div>
+        <button type="button" class="btn" id="risk-closest-link">查看仓位</button>
+      </div>
+      <details class="risk-method"><summary>风险等级说明</summary>
+        <p class="hint">按可读取的预估强平距离评估。5% 以内为高风险，15% 以内为需关注。仅在全市场数据齐全且有效时显示低风险或无持仓。</p>
+      </details>
     </section>
 
     <div class="overview" data-wallet-detail>
@@ -163,7 +192,7 @@
       </section>
     </div>
 
-    <section class="panel holdings" aria-label="持仓与余额" data-wallet-detail>
+    <section class="panel holdings" id="positions-panel" aria-label="持仓与余额" data-wallet-detail>
       <div class="holdings-head">
         <div class="holdings-tabs" id="holdings-tabs" role="group" aria-label="资产类型">
           <button type="button" data-tab="positions" aria-pressed="true">合约持仓 <span id="position-count">—</span></button>
@@ -185,6 +214,13 @@
         </select></label>
       </div>
       <div class="holdings-body" id="holdings-body"></div>
+    </section>
+
+    <section class="panel account-events" aria-labelledby="account-events-title" data-wallet-detail>
+      <div class="account-events-head"><div><h2 id="account-events-title">最近账户事件</h2><p class="hint" id="account-events-status">等待数据</p></div>
+        <a class="quiet-link" href="/#activity">查看动态</a></div>
+      <ul id="account-event-list" class="account-event-list" hidden></ul>
+      <p id="account-events-empty" class="hint"></p>
     </section>
 
     <details class="panel overview-comparison" id="overview-comparison" data-wallet-detail>

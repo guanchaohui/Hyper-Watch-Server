@@ -6,6 +6,7 @@ import { cleanSubscription, sendPush } from "./push.js";
 import { formatNotificationPreview } from "./notification-format.js";
 import { allPerpPositions, hyperliquidInfo } from "./hyperliquid.js";
 import { inboxKinds, markInboxRead, readInbox } from "./inbox.js";
+import { readOverviewActivity } from "./overview-activity.js";
 
 const marketTypes = new Set(["portfolio", "clearinghouseState", "spotClearinghouseState", "userFillsByTime", "userFunding", "userNonFundingLedgerUpdates"]);
 const timedTypes = new Set(["userFillsByTime", "userFunding", "userNonFundingLedgerUpdates"]);
@@ -178,6 +179,11 @@ export default {
       if (!user) return json({ error: "请先登录看板" }, 401);
       if (route === "/api/market" && request.method === "POST") return proxyMarket(request);
       if (request.headers.get("x-hyper-account") !== user) return json({ error: "登录账户已变化，请刷新页面" }, 401);
+      if (route === "/api/overview-activity" && request.method === "GET") {
+        const wallet = addressOf(url.searchParams.get("wallet"));
+        if (!wallet) return json({ error: "无效的钱包地址" }, 400);
+        return json(await readOverviewActivity(env.DB, user, wallet));
+      }
       if (route === "/api/positions" && request.method === "GET") {
         const address = addressOf(url.searchParams.get("wallet"));
         const row = await env.DB.prepare("SELECT settings FROM profiles WHERE user_id = ?").bind(user).first();
