@@ -215,3 +215,59 @@ test("今日快照接口只返回当前账户保存的钱包和 UTC+8 相关样�
     equity: [[midnight - 15 * minute, 123], [midnight, 124]], pnl: [[midnight, 19]],
   });
 });
+
+test("概览优先使用已覆盖今日的成交，与近 24 小时事件的覆盖分别判断", async t => {
+  const { sqlite, DB } = setup(t);
+  t.mock.method(Date, "now", () => now);
+  const midnight = periodStart("today", now);
+  const coverage = sqlite.prepare("INSERT INTO market_coverage VALUES (?,?,?,?,?,?,?)");
+  sqlite.prepare("INSERT INTO profiles VALUES (?, ?, ?)").run("alpha", JSON.stringify({ wallets: [{ address: wallet }] }), 1);
+  const until = now - 30_000;
+  coverage.run(wallet, "fill", midnight, until, now, "ready", 86_400_000);
+  coverage.run(wallet, "ledger", now - day, until, now, "ready", 86_400_000);
+  await recordMarketRows(DB, wallet, "fill", [
+    fill(1, midnight - 1000, "1", "1", "A", "999"),
+    fill(2, midnight + 1000, "1", "1", "A", "20.5"),
+    fill(3, midnight + 2000, "1", "1", "A", "25", { coin: "@1" }),
+    fill(4, now - 1000, "1", "1", "A", "111"),
+  ]);
+  await recordMarketRows(DB, wallet, "ledger", [{ time: midnight + 2000, hash: "fixture", delta: { type: "deposit", usdc: "123" } }]);
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async (_, init) => {
+    requests.push(JSON.parse(init.body).type);
+    throw Error("Upstream timed out");
+  });
+  const call = async account => {
+    const route = "https://test.invalid/api/overview-activity?wallet=" + wallet;
+    const response = await worker.fetch(new Request(route, {
+      headers: { "oai-authenticated-user-id": account, "x-hyper-account": account },
+    }), { DB });
+    return response.json();
+  };
+  const saved = await call("alpha");
+  assert.equal(saved.realized, 20.5);
+  assert.equal(saved.realizedAsOf, until);
+  assert.equal(saved.fillsState, "ready");
+  assert.equal(saved.tradeEventsState, "incomplete");
+  assert.equal(saved.ledgerState, "ready");
+  assert.ok(saved.events.some(event => event.type === "deposit"));
+  assert.deepEqual(requests, []);
+  const unsaved = await call("beta");
+  assert.equal(unsaved.fillsState, "unavailable");
+  assert.equal(unsaved.realized, null);
+  assert.equal(unsaved.events.length, 0);
+  assert.deepEqual(requests.sort(), ["userFillsByTime", "userNonFundingLedgerUpdates"]);
+
+  const setThrough = sqlite.prepare("UPDATE market_coverage SET through=? WHERE wallet=? AND kind='fill'");
+  setThrough.run(now - 180_000, wallet);
+  const fallback = await call("alpha");
+  assert.equal(fallback.realized, 20.5);
+  assert.equal(fallback.realizedAsOf, now - 180_000);
+  assert.equal(fallback.tradeEventsState, "unavailable");
+
+  sqlite.prepare("UPDATE market_coverage SET since=?, through=? WHERE wallet=? AND kind='fill'")
+    .run(midnight - 10_000, midnight - 1000, wallet);
+  const yesterday = await call("alpha");
+  assert.equal(yesterday.fillsState, "unavailable");
+  assert.equal(yesterday.realized, null);
+});

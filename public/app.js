@@ -205,9 +205,7 @@ function renderMetrics() {
   setNumber("equity", last?.[1]);
   setNumber("daily", daily, { signed: true });
   setNumber("floating", unrealized, { signed: true });
-  const todayTitle = today.pnlStart !== null && today.pnlStart !== today.midnight ? "今日净盈亏（部分时段）" : "今日净盈亏";
-  $("range-label").textContent = range === "today" ? todayTitle : "区间盈亏";
-  $("today-net-title").textContent = todayTitle;
+  $("range-label").textContent = range === "today" ? "今日净盈亏" : "区间盈亏";
   $("today-pinned").hidden = range === "today";
   setNumber("today-net", today.data?.pnl ?? null, { signed: true });
   $("today-net-note").textContent = todayNote(today);
@@ -227,14 +225,17 @@ function renderMetrics() {
 }
 
 function renderRealized() {
-  const { activity, activityError, demo } = session;
-  const today = activity?.todayStart === utc8DayStart() ? activity : null;
+  const { activity, activityError, demo, lastRealized } = session;
+  const start = utc8DayStart();
+  const today = activity?.todayStart === start ? activity : null;
+  const known = lastRealized?.todayStart === start ? lastRealized : null;
+  setNumber("realized-today", known?.realized ?? null, { signed: true });
   const status = today?.fillsState;
-  setNumber("realized-today", today?.realized ?? null, { signed: true });
-  $("realized-note").textContent = demo ? "演示模式" : activityError ? "上次读取 · 正在重试" :
-    status === "ready" ? "UTC+8 · 合约成交 · " + clock.format(today.asOf) :
-    status === "limited" ? "成交覆盖需分页核对" : status === "incomplete" ? "成交数据不完整" :
-    status === "unavailable" ? "成交暂不可用" : "UTC+8 · 等待成交数据";
+  const observed = known?.realizedAsOf ?? known?.asOf;
+  $("realized-note").textContent = demo ? "演示模式" :
+    known ? "合约成交 · 截至 " + chinaClock.format(observed) + "（UTC+8）" :
+    status === "limited" ? "成交待补齐" : status === "incomplete" ? "成交数据不完整" :
+    activityError || status === "unavailable" ? "等待成交同步" : "UTC+8 · 等待成交数据";
 }
 
 const positionKey = row => JSON.stringify([row.dex, row.coin]);
@@ -283,7 +284,7 @@ function renderRecentEvents() {
   const { activity, activityError, demo } = session;
   const list = $("account-event-list");
   const empty = $("account-events-empty");
-  const complete = activity?.fillsState === "ready" && activity?.ledgerState === "ready";
+  const complete = (activity?.tradeEventsState ?? activity?.fillsState) === "ready" && activity?.ledgerState === "ready";
   $("account-events-status").textContent = demo ? "演示模式" : activityError || !navigator.onLine ? "事件更新延迟" : activity ?
     "近 24 小时 · " + (complete ? "更新于 " + clock.format(activity.asOf) : "部分数据可用") : "等待账户事件";
   list.hidden = !activity?.events.length;
@@ -616,6 +617,10 @@ async function refreshOverviewActivity(s) {
     });
     if (!response.ok) throw new Error("Overview activity unavailable");
     s.activity = await response.json();
+    const old = s.lastRealized;
+    const next = s.activity;
+    if (next.fillsState === "ready" && (old?.todayStart !== next.todayStart ||
+      (old.realizedAsOf ?? old.asOf) <= (next.realizedAsOf ?? next.asOf))) s.lastRealized = next;
     s.activityError = false;
   } catch {
     s.activityError = true;
@@ -636,7 +641,7 @@ function openAccount(user, demo = false, focusCoin = null) {
   const s = {
     user, demo, focusCoin, controller: new AbortController(), errors: new Set(),
     history: null, equitySnapshots: null, snapshotNext: 0, positions: null, spot: null, requestedAt: 0, requesting: false,
-    activity: null, activityNext: 0, activityPending: false, activityError: false,
+    activity: null, lastRealized: null, activityNext: 0, activityPending: false, activityError: false,
     disconnect: null, streamAt: 0, scope: "", times: new Map(), problems: new Map(),
   };
   session = s;

@@ -30,9 +30,10 @@ test("概览活动按登录账户隔离，共享公开缓存，今日盈亏去�
   const sqlite = new DatabaseSync(":memory:");
   t.after(() => sqlite.close());
   sqlite.exec("CREATE TABLE alerts (user_id TEXT, event_id TEXT, created_at INTEGER)");
+  sqlite.exec("CREATE TABLE profiles (user_id TEXT, settings TEXT)");
   const DB = { prepare(sql) {
     const stmt = sqlite.prepare(sql);
-    return { bind: (...args) => ({ all: () => ({ results: stmt.all(...args) }) }) };
+    return { bind: (...args) => ({ first: () => stmt.get(...args), all: () => ({ results: stmt.all(...args) }) }) };
   } };
   const wallet = "0x" + "a".repeat(40);
   const other = "0x" + "b".repeat(40);
