@@ -1,6 +1,6 @@
 import { planAdvancedRisk, privatePush, riskDetails } from "./advanced-risk.js";
 import { fullPositionSnapshot } from "./position-source.js";
-import { cleanProfile, day, gapToLiquidation, latestEquitySample, positionLeverage, walletName } from "./analytics.js";
+import { cleanProfile, day, latestEquitySample, positionLeverage, walletName } from "./analytics.js";
 import { parsePortfolio, parsePositions } from "./market.js";
 import { hyperliquidInfo } from "./hyperliquid.js";
 import { accountEquityNotice, equitySampleFreshness, planEquityChange, planEquityVolatility, readEquityChangeBaseline } from "./equity-change-alerts.js";
@@ -13,6 +13,12 @@ export { recordFillAlerts } from "./trade-alerts.js";
 
 export const alertCheckMinutes = 60;
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+
+function gapToLiquidation(row) {
+  if (!(row?.mark > 0) || !(row?.liquidation > 0)) return null;
+  const distance = (row.size > 0 ? row.mark - row.liquidation : row.liquidation - row.mark) / row.mark * 100;
+  return Number.isFinite(distance) ? Math.max(0, distance) : null;
+}
 
 function alertInsert(db, user, id, body, now, title = null) {
   return db.prepare("INSERT OR IGNORE INTO alerts (user_id, event_id, body, created_at, title) VALUES (?, ?, ?, ?, ?)")

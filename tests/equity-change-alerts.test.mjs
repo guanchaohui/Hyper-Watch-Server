@@ -214,6 +214,8 @@ test("同一轮仓位风险合并后，每台设备只提交一次", async () =>
     assert.equal(JSON.parse(options.body).type, "clearinghouseState");
     return Response.json({ assetPositions: [{ position: {
       coin: "BTC", szi: "1", positionValue: "100", unrealizedPnl: "-40", liquidationPx: "98",
+    } }, { position: {
+      coin: "ETH", szi: "-1", positionValue: "100", unrealizedPnl: "0", liquidationPx: null,
     } }] });
   };
   try {
@@ -230,6 +232,7 @@ test("同一轮仓位风险合并后，每台设备只提交一次", async () =>
     assert.equal(alerts.length, 1);
     assert.equal(alerts[0].title, "仓位风险 · 样例钱包");
     assert.match(alerts[0].body, /合约净浮亏达到 \$40\.00\nBTC 距离强平还剩 2\.00%/);
+    assert.doesNotMatch(alerts[0].body, /ETH/);
     assert.equal(sqlite.prepare("SELECT count(*) AS count FROM transmissions").get().count, 1);
   } finally {
     globalThis.fetch = beforeFetch;

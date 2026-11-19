@@ -184,8 +184,7 @@ h1 { margin-top: 4px; font-size: 34px; line-height: 1.2; font-weight: 730; lette
 .holdings-table .position-risk-row td { padding: 0 17px 6px; text-align: left; border-top: 0; }
 .position-risk-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; }
 .position-risk-fields dt { color: var(--muted); font-size: 11px; }
-.position-risk-fields dd { margin: 0; font-weight: 600; }
-.position-risk-fields .risk-urgent { color: var(--pink); }
+.position-risk-fields dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
 .holding-side { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .holding-side .lev { margin-left: 0; }
 .position-pnl { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 2px 5px; white-space: nowrap; font-variant-numeric: tabular-nums; }

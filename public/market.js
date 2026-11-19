@@ -44,6 +44,7 @@ export function parsePositions(states) {
     if (size === 0) return [];
     if (size === null || typeof position?.coin !== "string" || !position.coin) throw new Error("Invalid position row");
     const value = numberOf(position.positionValue);
+    const liquidation = numberOf(position.liquidationPx);
     return [{
       coin: position.coin,
       dex,
@@ -56,7 +57,8 @@ export function parsePositions(states) {
       leverage: numberOf(position.leverage?.value),
       mode: position.leverage?.type ?? null,
       margin: numberOf(position.marginUsed),
-      liquidation: numberOf(position.liquidationPx),
+      liquidation: liquidation > 0 ? liquidation : null,
+      liquidationText: liquidation > 0 ? String(position.liquidationPx).trim() : null,
     }];
   })).sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
 }

@@ -182,25 +182,12 @@
 .risk-cockpit, .account-events { padding: 14px 16px 15px; margin-bottom: 14px; }
 .risk-cockpit-head, .account-events-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .risk-cockpit-head p, .account-events-head p { margin-block: 2px 0; }
-.risk-pill { flex: none; border: 1px solid #3b465a; background: #202735; color: #b9c6d9; border-radius: 20px; padding: 4px 9px; font-size: 12px; font-weight: 660; }
-.risk-pill[data-level="critical"] { background: #35232d; border-color: #784154; color: #ffb4c5; }
-.risk-pill[data-level="watch"] { background: #342919; border-color: #6d5230; color: #ffda9a; }
-.risk-pill[data-level="low"] { background: #19372e; border-color: #346150; color: #a1edcd; }
 .risk-cockpit-totals {
   display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 11px 0 0;
 }
 .risk-cockpit-totals div { background: var(--background); border: 1px solid var(--quiet-line); border-radius: 9px; padding: 8px 10px; min-width: 0; }
-.risk-cockpit-totals dt, .risk-cockpit-closest small { color: var(--muted); font-size: 11px; }
+.risk-cockpit-totals dt { color: var(--muted); font-size: 11px; }
 .risk-cockpit-totals dd { margin: 2px 0 0; font-size: clamp(15px, 4.4vw, 22px); font-weight: 690; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.risk-cockpit-closest {
-  display: grid; align-items: center; grid-template-columns: minmax(0, 1.2fr) minmax(0, .7fr) max-content;
-  gap: 7px; padding: 8px 0 0; margin-top: 9px; border-top: 1px solid var(--quiet-line);
-}
-.risk-cockpit-closest small, .risk-cockpit-closest strong { display: block; overflow-wrap: anywhere; }
-.risk-cockpit-closest strong { font-size: 13px; font-variant-numeric: tabular-nums; }
-.risk-cockpit-closest .btn { min-height: 40px; padding-inline: 9px; font-size: 12px; }
-.risk-method { margin-top: 4px; font-size: 11px; color: var(--muted); }
-.risk-method summary { width: fit-content; padding-block: 5px; cursor: pointer; }
 #positions-panel [data-position]:focus { outline: 2px solid var(--mint); outline-offset: -3px; }
 .account-events { margin-top: 12px; }
 .account-event-list { margin: 8px 0 0; padding: 0; list-style: none; }
@@ -224,7 +211,6 @@
   #dashboard .overview-comparison { order: 6; }
   #dashboard .footer { order: 7; }
   .risk-cockpit, .account-events { padding: 10px 11px; margin-bottom: 10px; }
-  .risk-cockpit-closest .btn { min-height: 44px; }
   #today-pinned[hidden] ~ .realized-metric { grid-column: 1 / -1; min-height: 62px; display: grid; grid-template-columns: 1fr auto; }
   #today-pinned[hidden] ~ .realized-metric .metric-number { grid-column: 2; grid-row: span 2; margin: 0; align-self: center; }
   .metrics .metric { min-height: 86px; }
@@ -261,7 +247,7 @@
   display: flex; flex-wrap: wrap; gap: 5px 9px; align-items: center;
   margin: 6px 0 1px; color: var(--muted); font-size: 12px;
 }
-.holding-risk-line .risk-pill { min-height: 20px; padding: 2px 6px; font-size: 10px; }
+.holding-risk-line strong { color: var(--text); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .holding-details summary { cursor: pointer; color: var(--muted); font-size: 11px; padding: 7px 0 3px; }
 .holding-details .position-risk-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 #position-count { white-space: nowrap; }

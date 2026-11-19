@@ -323,9 +323,9 @@ export function todayPortfolio(history, snapshots, now = Date.now()) {
 
 export function filterPositions(positions, { query = "", side = "all", sort = "notional" } = {}) {
   const tokens = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
-  const readers = { pnl: row => row.pnl, loss: row => row.pnl, risk: gapToLiquidation };
+  const readers = { pnl: row => row.pnl, loss: row => row.pnl };
   const read = Object.hasOwn(readers, sort) ? readers[sort] : row => row.value;
-  const ascending = sort === "loss" || sort === "risk";
+  const ascending = sort === "loss";
   return positions.filter(row => tokens.every(part => row.coin.toLowerCase().includes(part)) &&
     (side === "long" ? row.size > 0 : side === "short" ? row.size < 0 : true)).sort((a, b) => {
     const left = read(a);
@@ -358,36 +358,10 @@ export function tradingActivity(changes) {
     topCoins: [...volumeByCoin].sort((a, b) => b[1] - a[1]).slice(0, 3) };
 }
 
-export function gapToLiquidation(row) {
-  if (!(row?.mark > 0) || !(row?.liquidation > 0)) return null;
-  const distance = (row.size > 0 ? row.mark - row.liquidation : row.liquidation - row.mark) / row.mark * 100;
-  return Number.isFinite(distance) ? Math.max(0, distance) : null;
-}
-
-export function positionLiquidation(row) {
-  const gap = gapToLiquidation(row);
-  const state = gap !== null ? "priced" : row?.mode === "cross" && !(row.liquidation > 0) ? "shared" : "unavailable";
-  const level = gap === null ? "unknown" : gap <= 5 ? "critical" : gap <= 15 ? "watch" : "low";
-  return { state, gap, level };
-}
-
-export function positionRiskSummary(positions, { complete = false, fresh = false } = {}) {
-  let closest = null;
-  const rows = positions ?? [];
-  for (const row of rows) {
-    const { gap } = positionLiquidation(row);
-    if (gap !== null && (closest === null || gap < closest.gap)) closest = { row, gap };
-  }
-  const sum = key => positions && rows.every(row => Number.isFinite(row[key]) && row[key] >= 0)
-    ? rows.reduce((total, row) => total + row[key], 0) : null;
-  const gapsComplete = Boolean(positions && complete && rows.every(row => gapToLiquidation(row) !== null));
-  let level = "unknown";
-  if (fresh && positions) {
-    if (closest?.gap <= 5) level = "critical";
-    else if (closest?.gap <= 15) level = "watch";
-    else if (gapsComplete) level = rows.length ? "low" : "flat";
-  }
-  return { level, closest, complete: gapsComplete, notional: sum("value"), margin: sum("margin") };
+export function positionTotals(positions) {
+  const sum = key => positions && positions.every(row => Number.isFinite(row[key]) && row[key] >= 0)
+    ? positions.reduce((total, row) => total + row[key], 0) : null;
+  return { notional: sum("value"), margin: sum("margin") };
 }
 
 export function cashMovements(ledger) {

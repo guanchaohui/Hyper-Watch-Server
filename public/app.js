@@ -1,7 +1,7 @@
 import { createChart } from "./chart.js";
 import { setupWorkspace } from "./workspace.js";
-import { filterPositions, periodPnl, portfolioBrief, portfolioPeriodPoints, positionLeverage, positionLiquidation,
-  positionRiskSummary, todayGap, todayPortfolio, utc8DayStart } from "./analytics.js";
+import { filterPositions, periodPnl, portfolioBrief, portfolioPeriodPoints, positionLeverage,
+  positionTotals, todayGap, todayPortfolio, utc8DayStart } from "./analytics.js";
 import { addressOf, connectPerps, demoData, info, parsePortfolio, parsePositions, parseSpot } from "./market.js";
 
 const $ = id => document.getElementById(id);
@@ -71,6 +71,7 @@ pnlSummarySelect.value = ["day", "week", "month", "allTime"].includes(savedPnlRa
 const positionSort = $("position-sort");
 const positionLayout = $("position-layout");
 positionSort.value = loadPreference("position-sort", "notional");
+if (!positionSort.value) positionSort.value = "notional";
 positionLayout.value = loadPreference("position-layout", "auto");
 let autoRefresh = loadPreference("auto-refresh", true) !== false;
 let period = pnlSummarySelect.value;
@@ -166,7 +167,6 @@ function renderConnection() {
   $("holding-info").dataset.stream = tab === "positions" && streamLive ? "live" : "";
   const observed = s.times.get(tab);
   $("holding-info-text").textContent = observed ? holdingInfo + " · " + clock.format(observed) : holdingInfo;
-  if ($("holdings-body").dataset.fresh !== String(positionsFresh(s))) renderHoldings();
   renderRiskCockpit();
 }
 
@@ -239,45 +239,18 @@ function renderRealized() {
 }
 
 const positionKey = row => JSON.stringify([row.dex, row.coin]);
-const positionRiskLabels = { critical: "高风险", watch: "需关注", low: "低风险", flat: "无持仓", unknown: "待评估" };
-const positionsFresh = s => {
-  const at = s.times.get("positions");
-  return Boolean(s.demo || (navigator.onLine && at && Date.now() - at <= positionStaleAfter && !s.errors.has("positions")));
-};
-const missingLiquidation = state => state === "shared" ? "共享保证金风险" : "暂不可计算";
-
-function riskDistance(gap) {
-  if (!Number.isFinite(gap)) return "—";
-  if (masked) return "•••";
-  return gap > 0 && gap < 0.01 ? "<0.01%" : gap.toFixed(2) + "%";
-}
-
 function renderRiskCockpit() {
   const s = session;
   const observed = s.times.get("positions");
-  const fresh = positionsFresh(s);
+  const fresh = s.demo || (navigator.onLine && observed && Date.now() - observed <= positionStaleAfter && !s.errors.has("positions"));
   $("risk-cockpit").dataset.asOf = observed ?? "";
-  const risk = positionRiskSummary(s.positions, { complete: s.scope === "all" || s.demo, fresh });
-  const level = $("risk-level");
-  level.dataset.level = risk.level;
-  if (level.textContent !== positionRiskLabels[risk.level]) level.textContent = positionRiskLabels[risk.level];
+  const { notional, margin } = positionTotals(s.positions);
   const source = s.demo ? "演示数据" : !s.positions ? (s.errors.has("positions") || !navigator.onLine ? "仓位暂不可用" : "等待仓位数据") :
     !fresh ? "仓位数据延迟 · 显示上次快照" : s.scope === "main" ?
       "仅默认市场 · " + clock.format(observed) : "全部永续市场 · " + clock.format(observed);
-  const states = fresh ? (s.positions ?? []).map(row => positionLiquidation(row).state) : [];
-  const shared = states.filter(state => state === "shared").length;
-  const missing = states.filter(state => state === "unavailable").length;
-  $("risk-coverage").textContent = [source, shared ? shared + " 个全仓共享保证金" : "", missing ? missing + " 个强平距离暂不可计算" : ""]
-    .filter(Boolean).join(" · ");
-  setNumber("risk-notional", risk.notional);
-  setNumber("risk-margin", risk.margin);
-  const closest = fresh ? risk.closest : null;
-  $("risk-closest").hidden = !closest;
-  $("risk-closest-link").dataset.position = closest ? positionKey(closest.row) : "";
-  if (!closest) return;
-  const { row, gap } = closest;
-  $("risk-closest-name").textContent = row.coin + " · " + (row.size > 0 ? "多仓" : "空仓");
-  $("risk-closest-gap").textContent = riskDistance(gap);
+  $("risk-coverage").textContent = source;
+  setNumber("risk-notional", notional);
+  setNumber("risk-margin", margin);
 }
 
 function renderRecentEvents() {
@@ -386,25 +359,14 @@ function leverage(value, equity) {
   return ratio === null ? "—" : masked ? mask : ratio.toFixed(2) + "×";
 }
 
-function positionRisk(row, equity, liquidation) {
-  const { state, gap, level } = liquidation;
-  const emphasis = !masked && level === "critical" ? "risk-urgent" : "";
-  return [
-    ["保证金占用", amount(row.margin)],
-    ["仓位杠杆率", leverage(row.value, equity)],
-    ["预估强平价格", row.liquidation > 0 ? amount(row.liquidation) : missingLiquidation(state), emphasis],
-    ["距离强平还剩", state === "priced" ? riskDistance(gap) : missingLiquidation(state), emphasis],
-  ];
+function liquidationPrice(row) {
+  if (!row.liquidationText) return "—";
+  return masked ? mask : "$" + row.liquidationText;
 }
 
-function cardRisk(liquidation, fresh) {
-  const level = fresh ? liquidation.level : "unknown";
+function cardLiquidation(price) {
   const line = element("div", "holding-risk-line");
-  const badge = element("span", "risk-pill", positionRiskLabels[level]);
-  badge.dataset.level = level;
-  const distance = liquidation.state === "priced"
-    ? (fresh ? "距强平 " : "上次强平距离 ") + riskDistance(liquidation.gap) : missingLiquidation(liquidation.state);
-  line.append(badge, element("span", "", distance));
+  line.append(element("span", "", "预估强平价"), element("strong", "", price));
   return line;
 }
 
@@ -419,9 +381,9 @@ function positionPnl(row) {
   return pnl;
 }
 
-function addHoldingField(fields, label, value, state = "") {
+function addHoldingField(fields, label, value) {
   const field = element("div", "mobile-field");
-  field.append(element("dt", "", label), element("dd", state, value));
+  field.append(element("dt", "", label), element("dd", "", value));
   fields.append(field);
 }
 
@@ -431,8 +393,6 @@ function renderHoldings() {
   const openCards = new Set([...body.querySelectorAll(".holding-details[open]")].map(details => details.parentElement.dataset.position));
   const focused = body.contains(document.activeElement) ? document.activeElement.closest("[data-position]")?.dataset.position : null;
   const focusedSummary = focused && document.activeElement.tagName === "SUMMARY";
-  const fresh = positionsFresh(s);
-  body.dataset.fresh = String(fresh);
   body.dataset.asOf = s.times.get("positions") ?? "";
   $("spot-count").textContent = s.spot?.length ?? "—";
   const spot = tab === "spot";
@@ -499,8 +459,8 @@ function renderHoldings() {
     else {
       tr.dataset.position = card.dataset.position = positionKey(row);
       tr.tabIndex = card.tabIndex = -1;
-      const liquidation = positionLiquidation(row);
-      const risk = positionRisk(row, equity, liquidation);
+      const price = liquidationPrice(row);
+      const risk = [["保证金占用", amount(row.margin)], ["仓位杠杆率", leverage(row.value, equity)]];
       const detail = rows.insertRow();
       detail.className = "position-risk-row";
       const cell = detail.insertCell();
@@ -513,17 +473,18 @@ function renderHoldings() {
         addHoldingField(desktopFields, ...field);
         addHoldingField(mobileFields, ...field);
       }
+      addHoldingField(desktopFields, "预估强平价", price);
       cell.append(desktopFields);
       const breakdown = element("details", "holding-details");
       breakdown.open = openCards.has(card.dataset.position);
       breakdown.append(element("summary", "", "仓位详情"), fields, mobileFields);
-      card.append(cardRisk(liquidation, fresh), breakdown);
+      card.append(cardLiquidation(price), breakdown);
     }
     mobile.append(card);
   }
   body.replaceChildren(table, mobile);
   if (!spot) {
-    body.append(element("p", "position-risk-note", "仓位杠杆率＝该仓位价值 ÷ 账户总权益。强平价格由 Hyperliquid 估算。"));
+    body.append(element("p", "position-risk-note", "仓位杠杆率＝该仓位价值 ÷ 账户总权益。预估强平价来自 Hyperliquid。"));
     if (focused) {
       const target = [...body.querySelectorAll("[data-position]")].find(node => node.dataset.position === focused && node.getClientRects().length);
       (focusedSummary ? target?.querySelector("summary") : target)?.focus({ preventScroll: true });
@@ -703,15 +664,6 @@ function focusPosition(key) {
   return true;
 }
 
-$("risk-closest-link").addEventListener("click", ({ currentTarget }) => {
-  const key = currentTarget.dataset.position;
-  if (!key) return;
-  $("position-search").value = "";
-  $("position-side").value = "all";
-  $("holdings-tabs").querySelector('[data-tab="positions"]').click();
-  if ($("mobile-tabs").getClientRects().length) workspace.openPositions();
-  focusPosition(key);
-});
 $("position-search").addEventListener("input", renderHoldings);
 $("position-search-clear").addEventListener("click", () => {
   const search = $("position-search");

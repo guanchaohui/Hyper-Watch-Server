@@ -591,7 +591,7 @@ export function setupWorkspace(ui) {
         '<h2>其他仓位提醒</h2><div class="rule-thresholds">' +
         field("合约净浮亏达到（USD）", '<input type="number" min="0.01" max="1000000000000" step="any" id="rule-loss" value="' + esc(rule.loss ?? "") + '">') +
         field("距离强平还剩（%）", '<input type="number" min="0.01" max="100" step="any" id="rule-gap" value="' + esc(rule.gap ?? "") + '">') + '</div>' +
-        '<p class="hint">净浮亏统计默认合约市场。强平距离覆盖全部合约市场。留空关闭对应提醒。</p>' +
+        '<p class="hint">净浮亏统计默认合约市场。强平距离提醒依据 Hyperliquid 提供的强平价。留空关闭对应提醒。</p>' +
         '<h2>分级风险预警</h2><div class="rule-thresholds">' +
         Object.entries(riskFields).map(([key, [label, max, integer]]) => field(label, '<input id="risk-' + key +
           '" type="number" min="' + (integer ? 1 : 0.01) + '" max="' + max + '" step="' + (integer ? "1" : "any") +
@@ -1069,5 +1069,5 @@ export function setupWorkspace(ui) {
     if (active === "over" && comparison.open && !comparisonContent.contains(document.activeElement)) renderComparison();
     if (active === "alerts") { inbox({ automatic: true }); refreshEquityLevels(); refreshCloudHealth(); refreshPushControls(); }
   }, 45000);
-  return { openPositions: () => show("positions"), refreshComparison: renderComparison, refreshPrivacy: () => { if (active === "pnl") render(); else renderComparison(); }, openWallets: () => { show("wallets"); $("watch-address").focus(); } };
+  return { refreshComparison: renderComparison, refreshPrivacy: () => { if (active === "pnl") render(); else renderComparison(); }, openWallets: () => { show("wallets"); $("watch-address").focus(); } };
 }

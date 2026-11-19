@@ -1,29 +1,15 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
-import { day, positionLiquidation, positionRiskSummary, utc8DayStart } from "../dist/server/analytics.js";
+import { day, positionTotals, utc8DayStart } from "../dist/server/analytics.js";
 import worker from "../dist/server/index.js";
+import { parsePositions } from "../dist/server/market.js";
 
-test("全市场、默认市场和断线时的强平风险口径独立", () => {
-  const long = { coin: "BTC", size: 1, mark: 100, liquidation: 95, value: 100, margin: 20 };
-  const short = { coin: "xyz:NVDA", size: -1, mark: 200, liquidation: 206, value: 200, margin: 50 };
-  assert.deepEqual(positionRiskSummary([long, short], { complete: true, fresh: true }), {
-    level: "critical", closest: { row: short, gap: 3 }, complete: true, notional: 300, margin: 70,
-  });
-  const near = { ...long, liquidation: 88 };
-  assert.equal(positionRiskSummary([near], { fresh: true }).level, "watch");
-  const far = { ...long, liquidation: 80 };
-  assert.equal(positionRiskSummary([far], { fresh: true }).level, "unknown");
-  assert.equal(positionRiskSummary([far], { complete: true, fresh: true }).level, "low");
-  assert.equal(positionRiskSummary([long], { complete: true, fresh: false }).level, "unknown");
-  const missing = { ...short, liquidation: null, margin: null, value: null };
-  const partial = positionRiskSummary([far, missing], { complete: true, fresh: true });
-  assert.equal(partial.level, "unknown");
-  assert.equal(partial.margin, null);
-  assert.equal(partial.notional, null);
-  assert.equal(positionRiskSummary([], { complete: true, fresh: true }).level, "flat");
-  assert.equal(positionRiskSummary([], { complete: false, fresh: true }).level, "unknown");
-  assert.equal(positionRiskSummary(null).margin, null);
+test("仓位概况按快照汇总，不将缺失保证金作零处理", () => {
+  assert.deepEqual(positionTotals([{ value: 100, margin: 30 }, { value: 60, margin: 7 }]), { notional: 160, margin: 37 });
+  assert.deepEqual(positionTotals([{ value: null, margin: 30 }]), { notional: null, margin: 30 });
+  assert.deepEqual(positionTotals([]), { notional: 0, margin: 0 });
+  assert.deepEqual(positionTotals(null), { notional: null, margin: null });
 });
 
 test("概览活动按登录账户隔离，共享公开缓存，今日盈亏去重并分开资金流水", async t => {
@@ -97,19 +83,17 @@ test("概览活动按登录账户隔离，共享公开缓存，今日盈亏去�
   assert.equal(missing.realized, null);
 });
 
-test("全仓共享保证金与逐仓缺失分别展示，同样本给出最接近强平的仓位", () => {
-  const isolated = { coin: "xyz:IREN", size: 2, value: 200, margin: 50, mark: 100, liquidation: 92.8, mode: "isolated" };
-  const cross = { coin: "HYPE", size: 4, value: 80, margin: 20, mark: 20, liquidation: null, mode: "cross" };
-  const incomplete = { ...isolated, mark: null };
-  const missing = { ...isolated, liquidation: null };
-  assert.equal(positionLiquidation(isolated).level, "watch");
-  assert.equal(positionLiquidation(cross).state, "shared");
-  assert.equal(positionLiquidation({ ...cross, liquidation: 10 }).state, "priced");
-  assert.equal(positionLiquidation(incomplete).state, "unavailable");
-  assert.equal(positionLiquidation(missing).state, "unavailable");
-  const result = positionRiskSummary([cross, isolated], { complete: true, fresh: true });
-  assert.equal(result.closest.row, isolated);
-  assert.equal(result.closest.gap, positionLiquidation(isolated).gap);
-  assert.equal(result.margin, 70);
-  assert.equal(result.notional, 280);
+test("强平价保留 Hyperliquid 原始精度，缺失时全仓、逐仓都不补值", () => {
+  const rows = [{ coin: "xyz:IREN", liquidationPx: "92.800012345", szi: "2" },
+    { coin: "HYPE", liquidationPx: null, szi: "1", leverage: { type: "cross" } },
+    { coin: "BTC", szi: "1", leverage: { type: "isolated" } },
+    { coin: "ETH", liquidationPx: "-", szi: "2" },
+    { coin: "SOL", liquidationPx: "0", szi: "3" }];
+  const positions = parsePositions([["", { assetPositions: rows.map(position => ({ position })) }]]);
+  assert.equal(positions[0].liquidationText, "92.800012345");
+  assert.equal(positions[0].liquidation, 92.800012345);
+  for (const row of positions.slice(1)) {
+    assert.equal(row.liquidationText, null);
+    assert.equal(row.liquidation, null);
+  }
 });

@@ -140,21 +140,12 @@
 
     <section class="panel risk-cockpit" id="risk-cockpit" aria-labelledby="risk-title" data-wallet-detail>
       <div class="risk-cockpit-head">
-        <div><h2 id="risk-title">仓位风险</h2><p id="risk-coverage" class="hint"></p></div>
-        <span class="risk-pill" id="risk-level" data-level="unknown" role="status">等待仓位</span>
+        <div><h2 id="risk-title">仓位概况</h2><p id="risk-coverage" class="hint"></p></div>
       </div>
       <dl class="risk-cockpit-totals">
         <div><dt>总仓位价值</dt><dd id="risk-notional">—</dd></div>
         <div><dt>合约保证金占用</dt><dd id="risk-margin">—</dd></div>
       </dl>
-      <div class="risk-cockpit-closest" id="risk-closest" hidden>
-        <div><small>最接近强平</small><strong id="risk-closest-name"></strong></div>
-        <div><small>距离强平</small><strong id="risk-closest-gap"></strong></div>
-        <button type="button" class="btn" id="risk-closest-link">查看仓位</button>
-      </div>
-      <details class="risk-method"><summary>风险等级说明</summary>
-        <p class="hint">按可读取的预估强平距离评估。5% 以内为高风险，15% 以内为需关注。仅在全市场数据齐全且有效时显示低风险或无持仓。</p>
-      </details>
     </section>
 
     <div class="overview" data-wallet-detail>
@@ -228,7 +219,7 @@
         </select></label>
         <label class="field"><span>排序</span><select id="position-sort">
           <option value="notional">仓位价值</option><option value="pnl">浮盈优先</option>
-          <option value="loss">浮亏优先</option><option value="risk">离强平最近</option>
+          <option value="loss">浮亏优先</option>
         </select></label>
         <label class="field"><span>显示</span><select id="position-layout">
           <option value="auto">自动</option><option value="cards">卡片</option><option value="table">表格</option>
