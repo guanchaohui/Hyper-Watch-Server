@@ -70,7 +70,8 @@
 .quick-mode .trend-panel { order: 2; margin-bottom: 12px; }
 .quick-mode .exposure-panel { order: 3; }
 .quick-mode .overview-comparison { order: 4; }
-.quick-mode .footer { order: 5; }
+.quick-mode .account-events { order: 5; }
+.quick-mode .footer { order: 6; }
 .quick-mode .chart-container { height: 155px; }
 .quick-mode .ring-area { flex-direction: row; gap: 20px; }
 .quick-mode .ring { width: 110px; height: 110px; flex: none; margin: 5px 0; }

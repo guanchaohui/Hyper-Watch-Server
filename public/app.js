@@ -173,9 +173,6 @@ function renderConnection() {
 const chinaClock = new Intl.DateTimeFormat("zh-CN", {
   timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
 });
-const chinaTime = new Intl.DateTimeFormat("zh-CN", {
-  timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-});
 function todayData(s) {
   const now = Date.now();
   const midnight = utc8DayStart(now);
@@ -221,8 +218,7 @@ function renderMetrics() {
   change.title = "区间盈亏金额 ÷ 期初账户权益";
   const note = $("daily-note");
   if (range === "today") note.textContent = todayNote(today);
-  else if (summary) note.textContent = (Number.isFinite(first) ? "期初权益 " + amount(first) : "缺少同期权益") +
-    " · " + chinaTime.format(summary.start) + " 起算";
+  else if (summary) note.textContent = Number.isFinite(first) ? "期初权益 " + amount(first) : "缺少同期权益";
   else note.textContent = "等待区间盈亏样本";
   $("equity-note").textContent = s.user && last ? "样本时间 " + time.format(last[0]) : "Hyperliquid 账户估值";
   const observed = s.times.get("positions");
