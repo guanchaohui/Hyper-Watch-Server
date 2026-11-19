@@ -488,6 +488,7 @@ function renderHoldings() {
     if ($("position-filter-status").textContent !== status) $("position-filter-status").textContent = status;
   }
   $("position-search-clear").hidden = !query;
+  positionSort.hidden = spot || !raw?.length;
   const filterToggle = $("toggle-position-filters");
   filterToggle.hidden = spot || (!raw?.length && !filtered);
   filterToggle.setAttribute("aria-expanded", String(filtersOpen));

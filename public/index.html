@@ -216,6 +216,13 @@
           </div>
           <div class="holding-actions">
             <span class="holding-info" id="holding-info"><i></i><span id="holding-info-text">未选择钱包</span></span>
+            <select id="position-sort" aria-label="仓位排序" hidden>
+              <option value="notional">仓位价值 ↓</option>
+              <option value="notional-asc">仓位价值 ↑</option>
+              <option value="pnl">浮盈优先</option>
+              <option value="loss">浮亏优先</option>
+              <option value="manual">手动排列</option>
+            </select>
             <button class="btn" id="toggle-position-filters" type="button" aria-controls="holdings-tools" aria-expanded="false" hidden>筛选</button>
           </div>
         </div>
@@ -229,10 +236,6 @@
           </div>
           <label class="field"><span>方向</span><select id="position-side">
             <option value="all">全部</option><option value="long">多仓</option><option value="short">空仓</option>
-          </select></label>
-          <label class="field"><span>排序</span><select id="position-sort">
-            <option value="notional">仓位价值</option><option value="pnl">浮盈优先</option>
-            <option value="loss">浮亏优先</option><option value="manual">手动排列</option>
           </select></label>
           <label class="field"><span>显示</span><select id="position-layout">
             <option value="auto">自动</option><option value="cards">卡片</option><option value="table">表格</option>

@@ -318,7 +318,7 @@ export function filterPositions(positions, { query = "", side = "all", sort = "n
   const tokens = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
   const readers = { pnl: row => row.pnl, loss: row => row.pnl };
   const read = Object.hasOwn(readers, sort) ? readers[sort] : row => row.value;
-  const ascending = sort === "loss";
+  const ascending = sort === "loss" || sort === "notional-asc";
   return positions.filter(row => tokens.every(part => row.coin.toLowerCase().includes(part)) &&
     (side === "long" ? row.size > 0 : side === "short" ? row.size < 0 : true)).sort((a, b) => {
     const left = read(a);

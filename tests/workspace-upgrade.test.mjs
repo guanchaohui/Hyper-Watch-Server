@@ -79,6 +79,19 @@ test("收藏独立于置顶，仓位兼容多市场消息并可按方向与浮�
   assert.deepEqual(filterPositions(positions, { side: "long" }).map(row => row.coin), ["ETH"]);
 });
 
+test("仓位价值支持升降序且缺失数据排在末尾", () => {
+  const positions = parsePositions({ "": { assetPositions: [
+    { position: { coin: "ETH", szi: "-2", positionValue: "-1900" } },
+    { position: { coin: "BTC", szi: "1", positionValue: "200" } },
+    { position: { coin: "SOL", szi: "1", positionValue: "30" } },
+    { position: { coin: "HYPE", szi: "1" } },
+  ] } });
+  const coins = options => filterPositions(positions, options).map(row => row.coin);
+  assert.deepEqual(coins(), ["ETH", "BTC", "SOL", "HYPE"]);
+  assert.deepEqual(coins({ sort: "notional-asc" }), ["SOL", "BTC", "ETH", "HYPE"]);
+  assert.deepEqual(coins({ sort: "notional-asc", side: "long" }), ["SOL", "BTC", "HYPE"]);
+});
+
 test("交易行为统计按仓位变动、成交额和有盈亏的减平仓计算", () => {
   const time = Date.parse("2026-11-18T16:10:00Z");
   const stats = tradingActivity([
