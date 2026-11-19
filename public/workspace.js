@@ -3,8 +3,15 @@ import { addressOf, actionLabels, cashMovements, cleanEquityChangeAlert, cleanPr
   leverageAlertDefault, metricsFor, notificationFieldLabels, riskFields, riskLabels, portfolioBrief, positionChanges, tradeAlertSettings, tradingActivity, walletLimit, walletName } from "./analytics.js";
 import { formatNotificationPreview } from "./notification-format.js";
 import { info, parsePortfolio, parsePositions } from "./market.js";
+import { enablePageSwipe } from "./mobile-swipe.js";
 
 const $ = id => document.getElementById(id);
+const mobileViewOf = view => view === "pnl" ? "activity" : view === "wallets" ? "mine" : view;
+const swipeContentExclusions = [
+  "button", "a", "input", "select", "textarea", "label", "summary", "canvas", "[contenteditable]",
+  "#mobile-wallet-strip", ".data-scroll", '.holdings-body[data-layout="table"]',
+  ".workspace-panel:has(#save-rules, #save-watch)", "#overview-layout[data-editing]",
+].join(",");
 const siteRuntime = document.documentElement.dataset.runtime === "site";
 const account = document.documentElement.dataset.account;
 const formatting = new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
@@ -40,6 +47,8 @@ function table(columns, rows) {
 
 export function setupWorkspace(ui) {
   const viewRoot = $("workspace-view");
+  const mobileTabs = $("mobile-tabs");
+  const mobileViews = [...mobileTabs.querySelectorAll("[data-view]")].map(button => button.dataset.view);
   const comparison = $("overview-comparison");
   const comparisonContent = $("overview-comparison-content");
   let profile = cleanProfile(ui.load("workspace", {}));
@@ -870,9 +879,9 @@ export function setupWorkspace(ui) {
     const changed = active !== next;
     active = next;
     const desktopView = next === "positions" ? "over" : next === "mine" ? "wallets" : next;
-    const mobileView = next === "pnl" ? "activity" : next === "wallets" ? "mine" : next;
+    const mobileView = mobileViewOf(next);
     for (const button of $("workspace-tabs").querySelectorAll("button")) button.setAttribute("aria-pressed", String(button.dataset.view === desktopView));
-    for (const button of $("mobile-tabs").querySelectorAll("button")) {
+    for (const button of mobileTabs.querySelectorAll("button")) {
       if (button.dataset.view === mobileView) button.setAttribute("aria-current", "page");
       else button.removeAttribute("aria-current");
     }
@@ -902,12 +911,26 @@ export function setupWorkspace(ui) {
     fillsCache.clear();
     renderComparison();
   });
-  for (const nav of [$("workspace-tabs"), $("mobile-tabs")]) {
+  for (const nav of [$("workspace-tabs"), mobileTabs]) {
     nav.addEventListener("click", event => {
       const next = event.target.closest("button")?.dataset.view;
-      if (next) show(next === "activity" && nav.id === "mobile-tabs" && active === "pnl" ? "pnl" : next);
+      if (next) show(next === "activity" && nav === mobileTabs && active === "pnl" ? "pnl" : next);
     });
   }
+  enablePageSwipe(document.body, {
+    currentView: () => active,
+    canStart(target) {
+      if (!mobileTabs.getClientRects().length || document.querySelector("dialog[open]")) return false;
+      if (mobileTabs.contains(target)) return true;
+      return (target === document.body || target.closest("#dashboard, #workspace-view")) &&
+        !target.closest(swipeContentExclusions);
+    },
+    move(direction) {
+      const next = mobileViews[mobileViews.indexOf(mobileViewOf(active)) + direction];
+      if (!next) return;
+      show(next);
+    },
+  });
   $("wallet-prev").addEventListener("click", () => stepWallet(-1));
   $("wallet-next").addEventListener("click", () => stepWallet(1));
   document.addEventListener("hyper-wallet-changed", renderMobileWallet);

@@ -283,7 +283,7 @@
   }
   .mobile-shortcuts, .mobile-tabs { display: grid; gap: 0; }
   .mobile-shortcuts { grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1px solid var(--quiet-line); }
-  .mobile-tabs { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .mobile-tabs { grid-template-columns: repeat(5, minmax(0, 1fr)); touch-action: pan-y pinch-zoom; }
   .mobile-dock button {
     border: 0; background: transparent; color: var(--muted); font-size: 12px;
     display: flex; align-items: center; justify-content: center; gap: 5px; min-width: 0;
