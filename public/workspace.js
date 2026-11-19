@@ -453,8 +453,10 @@ export function setupWorkspace(ui) {
     });
   }
 
-  const selectedNotificationFields = () =>
-    [...viewRoot.querySelectorAll('[name="notification-field"]:checked')].map(item => item.value);
+  const tradeNotificationSettings = () => ({
+    notificationFields: [...viewRoot.querySelectorAll('[name="notification-field"]:checked')].map(item => item.value),
+    notificationPositionUnit: $("notification-position-unit").value,
+  });
 
   function readEquityChangeRule() {
     return cleanEquityChangeAlert({
@@ -474,7 +476,7 @@ export function setupWorkspace(ui) {
     return {
       type: $("notification-preview-type").value,
       name: previewWalletName,
-      notificationFields: selectedNotificationFields(),
+      ...tradeNotificationSettings(),
       up: $("equity-change-up").value,
       down: $("equity-change-down").value,
       downsideMode: $("rule-equity-downside").value,
@@ -487,6 +489,7 @@ export function setupWorkspace(ui) {
 
   function updateNotificationPreview() {
     const settings = notificationPreviewSettings();
+    $("notification-position-setting").hidden = !settings.notificationFields.includes("position");
     $("preview-wallet-field").hidden = settings.type !== "trade" || !settings.notificationFields.includes("wallet");
     const content = formatNotificationPreview(settings);
     $("notification-preview-title").textContent = content.title;
@@ -505,6 +508,11 @@ export function setupWorkspace(ui) {
         '</div><p class="hint">钱包列表中勾选「接收这个钱包的仓位变动」后适用。</p><h2>交易通知内容</h2><div class="rule-actions">' +
         Object.entries(notificationFieldLabels).map(([key, label]) => check("notification-field", key, rule.notificationFields.includes(key), label)).join("") +
         '</div><p class="hint">可只保留标题。已实现盈亏只在减仓、平仓或反手时显示。</p>' +
+        '<div id="notification-position-setting" class="notification-position-setting">' +
+        field("仓位变化显示", '<select id="notification-position-unit" aria-describedby="notification-position-note">' +
+          choose("usd", rule.notificationPositionUnit, "名义价值（USD）") +
+          choose("quantity", rule.notificationPositionUnit, "张数") + '</select>') +
+        '<p class="hint" id="notification-position-note">前后仓位使用同一个成交价折算，合并通知使用成交均价。</p></div>' +
         '<div class="notification-preview"><h3>通知预览</h3>' + field("预览类型", '<select id="notification-preview-type">' +
           choose("trade", previewType, "交易通知") + choose("up", previewType, "权益上涨提醒") +
           choose("down", previewType, "权益下跌提醒") + choose("volatility", previewType, "权益短时波动") +
@@ -721,7 +729,7 @@ export function setupWorkspace(ui) {
       return;
     }
     const previewSettings = preview ? notificationPreviewSettings() : null;
-    const testFields = action === "test" ? selectedNotificationFields() : null;
+    const testSettings = action === "test" ? tradeNotificationSettings() : null;
     const sendButton = testing ? $(preview ? "push-preview" : "push-test") : null;
     if (sendButton) {
       sendingTest = true;
@@ -752,7 +760,7 @@ export function setupWorkspace(ui) {
         } else {
           await request("/api/push-test", "POST", {
             endpoint: subscription.endpoint,
-            ...(preview ? { preview: previewSettings } : { notificationFields: testFields }),
+            ...(preview ? { preview: previewSettings } : testSettings),
           });
           message.textContent = "已提交推送，请查看本机通知。";
         }
@@ -887,7 +895,7 @@ export function setupWorkspace(ui) {
         }
         update({ ...profile, rules: {
           actions: [...viewRoot.querySelectorAll('[name="rule-action"]:checked')].map(item => item.value),
-          notificationFields: selectedNotificationFields(), equityChangeAlert,
+          ...tradeNotificationSettings(), equityChangeAlert,
           equityVolatility: volatilityEnabled ? volatilityFields() : null,
           leverageAlert: leverageEnabled ? $("leverage-threshold").value : null,
           equityMode, equity: downsideMode === "rolling" ? null : downsideInput?.value, equityTrackingId: profile.rules.equityTrackingId,
@@ -917,7 +925,7 @@ export function setupWorkspace(ui) {
       return;
     }
     if (target.id === "notification-preview-type") previewType = target.value;
-    if (target.name === "notification-field" || target.id === "notification-preview-type") {
+    if (target.name === "notification-field" || ["notification-preview-type", "notification-position-unit"].includes(target.id)) {
       updateNotificationPreview();
       return;
     }

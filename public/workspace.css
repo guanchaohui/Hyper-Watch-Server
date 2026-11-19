@@ -120,6 +120,8 @@
 .notification-preview-content p { white-space: pre-wrap; color: var(--muted); overflow-wrap: anywhere; margin: 4px 0 0; }
 
 .notification-preview-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 9px; }
+.notification-position-setting { margin: 9px 0; }
+.notification-position-setting .field { max-width: 230px; }
 
 .dashboard-empty { padding: clamp(16px, 4vw, 28px); }
 .dashboard-empty p, .dashboard-empty ol { margin: 8px 0 14px; color: var(--muted); }

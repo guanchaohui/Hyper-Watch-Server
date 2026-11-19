@@ -18,6 +18,10 @@ export function cleanNotificationFields(value) {
     : ["trade", "position", "pnl"];
 }
 
+export function cleanNotificationPositionUnit(value) {
+  return value === "quantity" ? "quantity" : "usd";
+}
+
 export function numberOf(value) {
   if ((typeof value !== "number" && typeof value !== "string") || String(value).trim() === "") return null;
   const number = Number(value);
@@ -103,6 +107,7 @@ export function cleanProfile(value) {
       equityVolatility: cleanEquityVolatility(rules.equityVolatility),
       leverageAlert: cleanLeverageAlert(rules.leverageAlert),
       notificationFields: cleanNotificationFields(rules.notificationFields),
+      notificationPositionUnit: cleanNotificationPositionUnit(rules.notificationPositionUnit),
       equityMode,
       equity: equityFloor,
       equityTrackingId: equityMode === "percent" && typeof rules.equityTrackingId === "string" &&

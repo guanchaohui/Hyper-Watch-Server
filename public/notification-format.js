@@ -1,4 +1,4 @@
-import { addressOf, cleanEquityChangeAlert, cleanEquityVolatility, cleanLeverageAlert, cleanNotificationFields,
+import { addressOf, cleanEquityChangeAlert, cleanEquityVolatility, cleanLeverageAlert, cleanNotificationFields, cleanNotificationPositionUnit,
   equityVolatilityDefaults, leverageAlertDefault, numberOf, positionLeverage, walletName } from "./analytics.js";
 
 const quantity = new Intl.NumberFormat("en-US", { maximumFractionDigits: 3 });
@@ -18,7 +18,20 @@ function formatQuantity(value) {
   return quantity.format(value);
 }
 
-export function formatFillNotification(wallet, change, fields) {
+function formatNotional(value) {
+  if (!Number.isFinite(value) || value < 0) return "—";
+  return value > 0 && value < 0.01 ? "<$0.01" : currency.format(value);
+}
+
+function formatPositionValue(size, unitPrice, showDirection) {
+  if (!Number.isFinite(size)) return "—";
+  if (size === 0) return formatNotional(0);
+  const amount = Math.abs(size) * unitPrice;
+  const direction = showDirection && Number.isFinite(amount) ? (size < 0 ? "空 " : "多 ") : "";
+  return direction + formatNotional(amount);
+}
+
+export function formatFillNotification(wallet, change, fields, positionUnit) {
   const { coin, action, start, end, size, price: fillPrice, value, closedPnl, count } = change;
   const symbol = typeof coin === "string" ? coin.split(":").at(-1).trim() || "合约" : "合约";
   const direction = action === "close" ? start : end;
@@ -31,12 +44,15 @@ export function formatFillNotification(wallet, change, fields) {
   const validPrice = Number.isFinite(fillPrice) && fillPrice > 0;
   const validSize = Number.isFinite(size) && size > 0;
   const notional = Number.isFinite(value) && value > 0 ? value : validSize && validPrice ? size * fillPrice : null;
-  const notionalLabel = Number.isFinite(notional) && notional > 0
-    ? (notional < 0.01 ? "<$0.01" : currency.format(notional)) : "—";
+  const unitPrice = validPrice ? fillPrice : (validSize && Number.isFinite(notional) ? notional / size : NaN);
+  const changedDirection = Number.isFinite(start) && Number.isFinite(end) && Math.sign(start) * Math.sign(end) < 0;
+  const position = cleanNotificationPositionUnit(positionUnit) === "quantity"
+    ? "仓位：" + formatQuantity(start) + " → " + formatQuantity(end) + " 张"
+    : "仓位价值：" + formatPositionValue(start, unitPrice, changedDirection) + " → " + formatPositionValue(end, unitPrice, changedDirection);
   const lines = {
     trade: "成交：" + (validSize ? formatQuantity(size) + " 张" : "—") + " @ " + (validPrice ? "$" + price.format(fillPrice) : "—"),
-    position: "仓位：" + formatQuantity(start) + " → " + formatQuantity(end) + " 张",
-    notional: "名义价值：" + notionalLabel,
+    position,
+    notional: "名义价值：" + formatNotional(notional),
     wallet: name.replace(/\s+/g, " ") || (address ? walletName({ address }) : "未命名钱包"),
     pnl: ["reduce", "close", "reverse"].includes(action)
       ? "已实现盈亏：" + (Number.isFinite(closedPnl) ? realized.format(closedPnl) : "—") : "",
@@ -88,7 +104,7 @@ export function formatLeverageNotification(ratio, threshold, notional, equity) {
 }
 
 export function formatNotificationPreview(options = {}) {
-  const { type, name, notificationFields, up, down, downsideMode, amount, peakDrop, volatility, leverage } = options ?? {};
+  const { type, name, notificationFields, notificationPositionUnit, up, down, downsideMode, amount, peakDrop, volatility, leverage } = options ?? {};
   if (type === "volatility") {
     const config = cleanEquityVolatility(volatility) ?? equityVolatilityDefaults;
     const current = 1000 * (1 + config.threshold / 100);
@@ -118,5 +134,5 @@ export function formatNotificationPreview(options = {}) {
     });
   }
   const sampleName = typeof name === "string" ? name.trim().slice(0, 28) : "";
-  return formatFillNotification({ name: sampleName || "示例钱包" }, sampleFill, notificationFields);
+  return formatFillNotification({ name: sampleName || "示例钱包" }, sampleFill, notificationFields, notificationPositionUnit);
 }

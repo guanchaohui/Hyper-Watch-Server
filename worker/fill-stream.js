@@ -63,7 +63,7 @@ export function startFillStream(env) {
     if (!subscribed.has(address)) return;
     const watchers = targets.get(address) ?? [];
     const outcomes = await Promise.allSettled(watchers.map(async ({ user, wallet, rules }) => {
-      if (await recordFillAlerts(env.DB, user, wallet, rules.actions, data.fills, 0, rules.notificationFields)) {
+      if (await recordFillAlerts(env.DB, user, wallet, rules, data.fills)) {
         await flushFillAlerts(env.DB, Date.now(), user);
         await queueAlertDelivery(env, user);
       }

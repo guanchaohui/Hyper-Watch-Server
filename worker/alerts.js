@@ -25,7 +25,7 @@ async function watchFills(db, user, wallet, rules, now) {
   const start = Math.min(end, Math.max(time - 2000, now - day));
   if (existing) {
     const rows = await hyperliquidInfo({ type: "userFillsByTime", user: wallet.address, startTime: start, endTime: end, aggregateByTime: false }, true);
-    await recordFillAlerts(db, user, wallet, rules.actions, rows, start, rules.notificationFields);
+    await recordFillAlerts(db, user, wallet, rules, rows, start);
   }
   await db.prepare("INSERT INTO alert_status VALUES (?, ?, ?, '[]') ON CONFLICT(user_id, target) DO UPDATE SET cursor = excluded.cursor")
     .bind(user, target, end).run();

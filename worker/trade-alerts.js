@@ -34,26 +34,27 @@ function endTradeBatch(db, user, address, change, now) {
   `).bind(now, user, address, change.coin, now, change.time, change.time);
 }
 
-export async function recordFillAlerts(db, user, wallet, selected, rows, earliest = 0, fields) {
+export async function recordFillAlerts(db, user, wallet, rules, rows, earliest = 0) {
   const trades = positionChanges(rows, false).filter(change => change.time >= earliest);
   if (!trades.length) return false;
+  const { actions, notificationFields: fields, notificationPositionUnit: positionUnit } = rules;
   const { tradeCooldown: seconds, minTradeValue: minimum } = tradeAlertSettings(wallet);
   const now = Date.now();
   const statements = [];
   for (const change of trades) {
     const adjust = change.action === "add" || change.action === "reduce";
     if (!adjust && seconds) statements.push(endTradeBatch(db, user, wallet.address, change, now));
-    if (!selected.includes(change.action)) continue;
+    if (!actions.includes(change.action)) continue;
     const id = "fill:" + wallet.address + ":" + change.id;
     if (adjust && (seconds || minimum)) {
-      const data = JSON.stringify({ change, name: wallet.name, seconds, minimum, fields });
+      const data = JSON.stringify({ change, name: wallet.name, seconds, minimum, fields, positionUnit });
       statements.push(db.prepare(queueTrade).bind(
         user, wallet.address, change.coin, now, change.time, change.time - seconds * 1000, change.action,
         change.start, seconds, minimum, user, wallet.address, change.id, change.coin, change.id,
         change.time, now + seconds * 1000, change.time, data, user, id,
       ));
     } else {
-      const { title, body } = formatFillNotification(wallet, change, fields);
+      const { title, body } = formatFillNotification(wallet, change, fields, positionUnit);
       statements.push(adjust ? db.prepare(
         "INSERT OR IGNORE INTO alerts (user_id, event_id, title, body, created_at) SELECT ?, ?, ?, ?, ? " +
         "WHERE NOT EXISTS (SELECT 1 FROM trade_alert_buffer WHERE user_id = ? AND wallet = ? AND fill_id = ?)",
@@ -77,7 +78,7 @@ export async function flushFillAlerts(db, now = Date.now(), account) {
       " ORDER BY trade_at, rowid").bind(...scope).all();
     if (!results.length) continue;
     const entries = results.map(row => JSON.parse(row.payload));
-    const { change: first, name, minimum, fields } = entries[0];
+    const { change: first, name, minimum, fields, positionUnit } = entries[0];
     const count = entries.length;
     const value = entries.reduce((sum, item) => sum + item.change.value, 0);
     const guard = "(SELECT COUNT(*) FROM trade_alert_buffer WHERE " + batchScope + ") = ?";
@@ -89,7 +90,7 @@ export async function flushFillAlerts(db, now = Date.now(), account) {
         ? entries.reduce((sum, item) => sum + item.change.closedPnl, 0) : null;
       const notice = formatFillNotification({ address: wallet, name }, {
         ...first, end: last.end, count, size, price: value / size, value, closedPnl,
-      }, fields);
+      }, fields, positionUnit);
       const id = count === 1 ? "fill:" + wallet + ":" + first.id : "fill:" + wallet + ":batch:" + batch;
       statements.push(db.prepare(
         "INSERT OR IGNORE INTO alerts (user_id, event_id, body, created_at, title) SELECT ?, ?, ?, ?, ? WHERE " + guard,

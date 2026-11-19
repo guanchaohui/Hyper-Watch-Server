@@ -135,6 +135,7 @@ async function pushRoute(request, env, user, route) {
     try {
       const sample = formatNotificationPreview(data.preview ?? {
         name: "测试钱包", notificationFields: data.notificationFields,
+        notificationPositionUnit: data.notificationPositionUnit,
       });
       const status = await sendPush(env, JSON.parse(row.subscription), {
         ...sample, title: "测试 · " + sample.title, tag: "hyper-test", account: user,
