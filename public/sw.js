@@ -1,3 +1,13 @@
+function notificationPath(value) {
+  if (typeof value !== "string" || !value.startsWith("/?wallet=")) return "/#alerts";
+  const query = new URLSearchParams(value.slice(2));
+  const wallet = query.get("wallet"), coin = query.get("position");
+  if (!/^0x[0-9a-f]{40}$/.test(wallet ?? "") || (coin !== null && !/^[a-z0-9:@._\/-]{1,64}$/i.test(coin))) return "/#alerts";
+  const safe = new URLSearchParams({ wallet });
+  if (coin) safe.set("position", coin);
+  return "/?" + safe;
+}
+
 self.addEventListener("install", event => event.waitUntil(self.skipWaiting()));
 self.addEventListener("activate", event => event.waitUntil(self.clients.claim()));
 self.addEventListener("push", event => {
@@ -24,7 +34,7 @@ self.addEventListener("push", event => {
       tag: (confirmedAccount && item.tag) || "hyper-watch",
       icon: "/icon.png",
       ...(confirmedAccount && Number.isFinite(item.timestamp) ? { timestamp: item.timestamp } : {}),
-      data: { path: "/#alerts" },
+      data: { path: confirmedAccount ? notificationPath(item.path) : "/#alerts" },
     });
   })());
 });
@@ -32,7 +42,7 @@ self.addEventListener("notificationclick", event => {
   event.notification.close();
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-    const target = new URL(event.notification.data?.path === "/#alerts" ? "/#alerts" : "/", self.location.origin);
+    const target = new URL(notificationPath(event.notification.data?.path), self.location.origin);
     const active = windows.find(window => new URL(window.url).origin === self.location.origin);
     if (active) {
       await active.focus();

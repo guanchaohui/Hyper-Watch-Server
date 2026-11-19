@@ -241,3 +241,15 @@
   .metrics .metric { min-height: 86px; }
   .metrics .total-metric { min-height: 92px; }
 }
+
+.ledger-coverage { padding: 0 0 0 18px; color: var(--muted); font-size: .82rem; line-height: 1.65; }
+.ledger-position { border: 1px solid var(--line); border-radius: 10px; margin: 8px 0; padding: 10px; }
+.ledger-position > summary { cursor: pointer; overflow-wrap: anywhere; }
+.ledger-position > summary span { font-size: .82rem; color: var(--muted); }
+.ledger-breakdown { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+.ledger-breakdown dt { color: var(--muted); font-size: .8rem; }
+.ledger-breakdown dd { margin: 0; overflow-wrap: anywhere; }
+.inbox-meta { flex-wrap: wrap; }
+.inbox-meta .risk-critical { color: #ff9da9; }
+.inbox-meta .risk-warning { color: #f6ca7c; }
+.inbox-meta .risk-info { color: var(--mint); }

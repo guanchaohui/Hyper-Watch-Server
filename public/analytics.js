@@ -65,6 +65,29 @@ export function cleanLeverageAlert(value) {
   return threshold >= 0.01 && threshold <= 1000 ? threshold : null;
 }
 
+export const riskFields = {
+  marginUsage: ["保证金占用超过（%）", 1000],
+  positionLoss: ["单仓浮亏达到（USD）", 1e12],
+  positionLossRate: ["单仓亏损率达到（%）", 10000],
+  positionGainRate: ["单仓收益率达到（%）", 1000000],
+  dailyLoss: ["今日净亏损达到（USD）", 1e12],
+  positionChange: ["持仓币种数量变化（个）", 1000, true],
+  dataOutage: ["数据中断达到（分钟）", 1440, true],
+};
+
+export const riskLabels = { info: "提示", warning: "警告", critical: "紧急" };
+
+function cleanAdvancedRisk(value) {
+  const rules = {};
+  for (const [key, [, max, integer]] of Object.entries(riskFields)) {
+    const threshold = numberOf(value?.[key]);
+    if (threshold >= 0.01 && threshold <= max && (!integer || Number.isInteger(threshold))) rules[key] = threshold;
+  }
+  if (!Object.keys(rules).length) return null;
+  const cooldown = numberOf(value?.cooldown);
+  return { ...rules, cooldown: Number.isInteger(cooldown) && cooldown >= 1 && cooldown <= 1440 ? cooldown : 15 };
+}
+
 export function cleanProfile(value) {
   const wallets = [];
   const seen = new Set();
@@ -106,6 +129,8 @@ export function cleanProfile(value) {
         ? cleanEquityChangeAlert({ ...equityChange, down: null }) : equityChange,
       equityVolatility: cleanEquityVolatility(rules.equityVolatility),
       leverageAlert: cleanLeverageAlert(rules.leverageAlert),
+      advancedRisk: cleanAdvancedRisk(rules.advancedRisk),
+      pushPrivate: rules.pushPrivate === true,
       notificationFields: cleanNotificationFields(rules.notificationFields),
       notificationPositionUnit: cleanNotificationPositionUnit(rules.notificationPositionUnit),
       equityMode,

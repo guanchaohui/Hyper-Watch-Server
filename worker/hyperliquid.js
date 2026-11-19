@@ -9,7 +9,7 @@ const snapshotLimit = 128;
 // of the app's budget for alert scans before admitting interactive queries.
 const budget = 1_000;
 const interactiveBudget = 720;
-const weightByType = { clearinghouseState: 2, spotClearinghouseState: 2, portfolio: 20, perpDexs: 20 };
+const weightByType = { clearinghouseState: 2, spotClearinghouseState: 2, portfolio: 20, perpDexs: 20, frontendOpenOrders: 20 };
 const dexListTtl = 5 * minute;
 const calls = [];
 const cached = new Map();
@@ -89,14 +89,18 @@ export async function hyperliquidInfo(payload, priority = false) {
   return promise;
 }
 
-export async function allPerpPositions(address, priority = false) {
+export async function perpMarkets(priority = false) {
   const registry = await hyperliquidInfo({ type: "perpDexs" }, priority);
   if (!Array.isArray(registry) || registry[0] !== null ||
       !registry.every(dex => dex === null || (typeof dex?.name === "string" && dex.name))) {
     throw new Error("Invalid perpetual exchange list");
   }
-  const markets = new Set(["", ...registry.filter(Boolean).map(dex => dex.name)]);
-  const states = await Promise.all([...markets].map(async dex => [dex,
+  return [...new Set(["", ...registry.filter(Boolean).map(dex => dex.name)])];
+}
+
+export async function allPerpPositions(address, priority = false) {
+  const markets = await perpMarkets(priority);
+  const states = await Promise.all(markets.map(async dex => [dex,
     await hyperliquidInfo({ type: "clearinghouseState", user: address, ...(dex ? { dex } : {}) }, priority),
   ]));
   return parsePositions(states);

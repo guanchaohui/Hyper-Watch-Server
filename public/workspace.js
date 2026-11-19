@@ -1,5 +1,6 @@
+import { ledgerRanges, ledgerSections, renderLedger } from "./ledger-panel.js";
 import { addressOf, actionLabels, cashMovements, cleanEquityChangeAlert, cleanProfile, day, equityVolatilityDefaults,
-  leverageAlertDefault, metricsFor, notificationFieldLabels, portfolioBrief, positionChanges, tradeAlertSettings, tradingActivity, walletLimit, walletName } from "./analytics.js";
+  leverageAlertDefault, metricsFor, notificationFieldLabels, riskFields, riskLabels, portfolioBrief, positionChanges, tradeAlertSettings, tradingActivity, walletLimit, walletName } from "./analytics.js";
 import { formatNotificationPreview } from "./notification-format.js";
 import { info, parsePortfolio, parsePositions } from "./market.js";
 
@@ -57,6 +58,11 @@ export function setupWorkspace(ui) {
   let activityAddress = "";
   let pnlAddress = "";
   let range = "7";
+  let pnlMode = ui.load("pnl-mode", "ledger");
+  let ledgerView = "summary";
+  let ledgerPeriod = ui.load("ledger-period", "today");
+  if (!Object.hasOwn(ledgerRanges, ledgerPeriod)) ledgerPeriod = "today";
+  let ledgerPages = [], ledgerNext = null;
   let eventFilter = "all";
   let inboxKind = "all", inboxUnread = false;
   let inboxItems = [], inboxNext = null, inboxExpanded = false, inboxRequest = 0;
@@ -415,11 +421,43 @@ export function setupWorkspace(ui) {
     }).catch(() => { if (output.isConnected && comparison.open) output.innerHTML = tip("仓位暂时无法读取，请稍后刷新。"); });
   }
 
+  function ledgerPage(token) {
+    const options = (values, current) => Object.entries(values).map(([value, label]) => choose(value, current, label)).join("");
+    viewRoot.innerHTML = titled("盈亏与交易账本", "记录成交、费用、资金流水和仓位历史。") +
+      panel('<div class="workspace-toolbar">' +
+        field("观察钱包", select("pnl-wallet", pnlAddress, realInputs()), "flex") +
+        field("查看方式", '<select id="pnl-mode">' + choose("ledger", "ledger", "交易账本") + choose("live", "ledger", "实时盈亏拆分") + '</select>') +
+        field("记录", '<select id="ledger-view">' + options(ledgerSections, ledgerView) + '</select>') +
+        (ledgerView === "open" ? "" : field("统计区间", '<select id="ledger-period">' + options(ledgerRanges, ledgerPeriod) + '</select>')) +
+        button("refresh-view", "刷新") + '</div><div id="pnl-data" aria-live="polite">' + tip("正在读取交易账本…") + '</div>' +
+        '<div class="workspace-toolbar">' + button("ledger-prev", "上一页") + button("ledger-next", "下一页") + '</div>');
+    $("ledger-prev").hidden = ledgerPages.length === 0;
+    $("ledger-next").hidden = true;
+    ledgerNext = null;
+    const query = new URLSearchParams({ wallet: pnlAddress, view: ledgerView, period: ledgerPeriod });
+    const cursor = ledgerPages.at(-1);
+    if (cursor) {
+      query.set("before", cursor.time);
+      query.set("id", cursor.id);
+    }
+    request("/api/ledger?" + query).then(result => {
+      if (token !== sequence) return;
+      $("pnl-data").innerHTML = renderLedger(ledgerView, result, { esc, table, tip, ui });
+      ledgerNext = result.next;
+      $("ledger-next").hidden = !ledgerNext;
+    }).catch(() => {
+      if (token === sequence) $("pnl-data").innerHTML = tip("账本暂时无法读取，请刷新重试。");
+    });
+  }
+
   function pnlPage(token) {
     pnlAddress = chooseWallet(pnlAddress);
+    const saved = siteRuntime && profile.wallets.some(wallet => wallet.address === pnlAddress);
+    if (saved && pnlMode !== "live") { ledgerPage(token); return; }
     viewRoot.innerHTML = titled("盈亏拆分", "按区间汇总成交和资金流水，当前浮盈单独显示。") +
       (!pnlAddress ? noWallet("添加钱包后可查看盈亏拆分。") : panel(
         '<div class="workspace-toolbar">' + field("观察钱包", select("pnl-wallet", pnlAddress, realInputs()), "flex") +
+        (saved ? field("查看方式", '<select id="pnl-mode">' + choose("ledger", "live", "交易账本") + choose("live", "live", "实时盈亏拆分") + '</select>') : "") +
         field("区间", '<select id="pnl-range">' + ["1", "7", "30"].map(value => choose(value, range, value + " 天")).join("") + '</select>') +
         button("refresh-view", "刷新") + '</div><div id="pnl-data">' + tip("正在读取成交、资金流水和当前持仓…") + '</div>'));
     if (!pnlAddress) return;
@@ -551,7 +589,16 @@ export function setupWorkspace(ui) {
         '<h2>其他仓位提醒</h2><div class="rule-thresholds">' +
         field("合约净浮亏达到（USD）", '<input type="number" min="0.01" max="1000000000000" step="any" id="rule-loss" value="' + esc(rule.loss ?? "") + '">') +
         field("距离强平还剩（%）", '<input type="number" min="0.01" max="100" step="any" id="rule-gap" value="' + esc(rule.gap ?? "") + '">') + '</div>' +
-        '<p class="hint">浮亏和强平距离统计默认合约市场。留空关闭对应提醒。</p>' +
+        '<p class="hint">净浮亏统计默认合约市场。强平距离覆盖全部合约市场。留空关闭对应提醒。</p>' +
+        '<h2>分级风险预警</h2><div class="rule-thresholds">' +
+        Object.entries(riskFields).map(([key, [label, max, integer]]) => field(label, '<input id="risk-' + key +
+          '" type="number" min="' + (integer ? 1 : 0.01) + '" max="' + max + '" step="' + (integer ? "1" : "any") +
+          '" value="' + esc(rule.advancedRisk?.[key] ?? "") + '">')).join("") +
+        field("重复提醒冷却（分钟）", '<input id="risk-cooldown" type="number" min="1" max="1440" step="1" value="' +
+          esc(rule.advancedRisk?.cooldown ?? 15) + '">') + '</div>' +
+        '<p class="hint">作用于我的钱包及其全部合约市场。保证金占用按合约保证金合计除以账户总权益计算。今日净亏损从 UTC+8 零点起算。留空关闭对应提醒。</p>' +
+        '<h2>锁屏通知隐私</h2>' + check("push-private", "on", rule.pushPrivate, "在系统通知中隐藏提醒详情") +
+        '<p class="hint">启用后，打开提醒记录可查看币种、金额和仓位。</p>' +
         button("save-rules", "保存规则") + syncFragment()) +
       panel('<h2>后台通知</h2><p class="hint" id="cloud-scan-note" aria-live="polite">正在读取云端检查状态…</p>' +
         '<p class="hint" id="push-delivery-note" aria-live="polite"></p><p class="hint" id="push-note">正在检查本机通知能力…</p><div id="push-controls" class="workspace-toolbar" hidden>' +
@@ -614,8 +661,13 @@ export function setupWorkspace(ui) {
         const receipt = item.readAt === null
           ? ' <button class="quiet-link" type="button" data-inbox-id="' + esc(item.id) + '">标为已读</button>'
           : ' <span class="subtle">已读</span>';
+        const risk = riskLabels[item.details?.level];
+        const link = typeof item.details?.path === "string" && item.details.path.startsWith("/?wallet=")
+          ? '<a class="quiet-link" href="' + esc(item.details.path) + '">' + (item.details.path.includes("&position=") ? "查看仓位" : "查看钱包") + '</a>' : "";
         return heading + '<article class="inbox-item"><div class="inbox-meta"><time datetime="' + new Date(item.time).toISOString() + '">' +
-          esc(inboxClock.format(item.time)) + '</time><span class="tag">' + esc(kind) + '</span>' + receipt + '</div><div class="alert-body">' +
+          esc(inboxClock.format(item.time)) + '</time><span class="tag">' + esc(kind) + '</span>' +
+          (risk ? '<span class="tag risk-' + item.details.level + '">' + esc(risk) + '</span>' : "") +
+          receipt + link + '</div><div class="alert-body">' +
           (item.title ? '<strong>' + esc(item.title) + '</strong><br>' : '') + esc(item.body) + '</div></article>';
       });
       el.innerHTML = rows.join("");
@@ -868,7 +920,9 @@ export function setupWorkspace(ui) {
         update({ ...profile, wallets: profile.wallets.filter(wallet => wallet.address !== target) });
         break;
       }
-      case "refresh-view": briefCache.clear(); fillsCache.clear(); render(); break;
+      case "refresh-view": briefCache.clear(); fillsCache.clear(); ledgerPages = []; render(); break;
+      case "ledger-prev": ledgerPages.pop(); render(); break;
+      case "ledger-next": if (ledgerNext) { ledgerPages.push(ledgerNext); render(); } break;
       case "use-cloud": keepVersion(true); break;
       case "use-device": keepVersion(false); break;
       case "reload-inbox": inbox(); break;
@@ -883,7 +937,9 @@ export function setupWorkspace(ui) {
         const downsideInput = $(downsideInputIds[downsideMode]);
         const volatilityEnabled = viewRoot.querySelector('[name="enable-volatility"]').checked;
         const leverageEnabled = viewRoot.querySelector('[name="enable-leverage"]').checked;
-        const inputs = [$("rule-loss"), $("rule-gap"), $("equity-change-up"), downsideInput];
+        const riskKeys = [...Object.keys(riskFields), "cooldown"];
+        const riskInputs = riskKeys.map(key => $("risk-" + key));
+        const inputs = [$("rule-loss"), $("rule-gap"), $("equity-change-up"), downsideInput, ...riskInputs];
         if (volatilityEnabled) inputs.push($("volatility-minutes"), $("volatility-threshold"));
         if (leverageEnabled) inputs.push($("leverage-threshold"));
         if (!inputs.filter(Boolean).every(input => input.reportValidity())) break;
@@ -900,6 +956,8 @@ export function setupWorkspace(ui) {
           leverageAlert: leverageEnabled ? $("leverage-threshold").value : null,
           equityMode, equity: downsideMode === "rolling" ? null : downsideInput?.value, equityTrackingId: profile.rules.equityTrackingId,
           loss: $("rule-loss").value, gap: $("rule-gap").value,
+          advancedRisk: Object.fromEntries(riskKeys.map((key, index) => [key, riskInputs[index].value])),
+          pushPrivate: viewRoot.querySelector('[name="push-private"]').checked,
         } });
         break;
       }
@@ -937,7 +995,10 @@ export function setupWorkspace(ui) {
       case "wallet-group-filter": watchGroup = target.value; break;
       case "activity-wallet": activityAddress = target.value; break;
       case "event-filter": eventFilter = target.value; break;
-      case "pnl-wallet": pnlAddress = target.value; break;
+      case "pnl-wallet": pnlAddress = target.value; ledgerPages = []; break;
+      case "pnl-mode": pnlMode = target.value; ledgerPages = []; ui.store("pnl-mode", pnlMode); break;
+      case "ledger-view": ledgerView = target.value; ledgerPages = []; break;
+      case "ledger-period": ledgerPeriod = target.value; ledgerPages = []; ui.store("ledger-period", ledgerPeriod); break;
       case "pnl-range": range = target.value; break;
       default: return;
     }
@@ -956,9 +1017,9 @@ export function setupWorkspace(ui) {
   let checkingAlerts = false;
   async function checkWhileOpen() {
     if (!siteRuntime || document.hidden || !navigator.onLine || dirty || checkingAlerts) return;
-    const { actions, equity, loss, gap, equityChangeAlert, equityVolatility, leverageAlert } = profile.rules;
+    const { actions, equity, loss, gap, equityChangeAlert, equityVolatility, leverageAlert, advancedRisk } = profile.rules;
     const applies = (actions.length && profile.wallets.some(wallet => wallet.notify)) ||
-      (own() && (equity || loss || gap || equityChangeAlert || equityVolatility || leverageAlert));
+      (own() && (equity || loss || gap || equityChangeAlert || equityVolatility || leverageAlert || advancedRisk));
     if (!applies) return;
     checkingAlerts = true;
     try {
@@ -978,5 +1039,5 @@ export function setupWorkspace(ui) {
     if (active === "over" && comparison.open && !comparisonContent.contains(document.activeElement)) renderComparison();
     if (active === "alerts") { inbox({ automatic: true }); refreshEquityLevels(); refreshCloudHealth(); refreshPushControls(); }
   }, 45000);
-  return { refreshComparison: renderComparison, openWallets: () => { show("wallets"); $("watch-address").focus(); } };
+  return { refreshComparison: renderComparison, refreshPrivacy: () => { if (active === "pnl") render(); else renderComparison(); }, openWallets: () => { show("wallets"); $("watch-address").focus(); } };
 }

@@ -24,6 +24,7 @@ test("旧库迁移保留设置和提醒，游标分页及已读隔离到账户",
     const migration = await readFile(new URL("../drizzle/0001_alert_receipts.sql", import.meta.url), "utf8");
     sqlite.exec(migration);
     sqlite.exec(migration);
+    sqlite.exec(await readFile(new URL("../drizzle/0004_alert_details.sql", import.meta.url), "utf8"));
     assert.deepEqual({ ...sqlite.prepare("SELECT settings, revision FROM profiles WHERE user_id = 'alpha'").get() }, { settings, revision: 7 });
     assert.equal(sqlite.prepare("SELECT count(*) AS count FROM alerts").get().count, 25);
     const DB = { prepare(sql) {

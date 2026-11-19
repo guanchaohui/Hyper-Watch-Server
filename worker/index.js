@@ -1,12 +1,15 @@
+import { fullPositionSnapshot } from "./position-source.js";
+import { privatePush } from "./advanced-risk.js";
 import assets from "./assets.js";
 import { addressOf, cleanProfile, day } from "./analytics.js";
 import { alertCheckMinutes, checkAlerts, equityAlertLevels } from "./alerts.js";
 import { readAlertHealth, readPushHealth, savePushHealth } from "./alert-health.js";
 import { cleanSubscription, sendPush } from "./push.js";
 import { formatNotificationPreview } from "./notification-format.js";
-import { allPerpPositions, hyperliquidInfo } from "./hyperliquid.js";
+import { hyperliquidInfo } from "./hyperliquid.js";
 import { inboxKinds, markInboxRead, readInbox } from "./inbox.js";
 import { readOverviewActivity } from "./overview-activity.js";
+import { ledgerPeriods, ledgerViews, readWalletLedger } from "./ledger-view.js";
 
 const marketTypes = new Set(["portfolio", "clearinghouseState", "spotClearinghouseState", "userFillsByTime", "userFunding", "userNonFundingLedgerUpdates"]);
 const timedTypes = new Set(["userFillsByTime", "userFunding", "userNonFundingLedgerUpdates"]);
@@ -138,9 +141,11 @@ async function pushRoute(request, env, user, route) {
         name: "测试钱包", notificationFields: data.notificationFields,
         notificationPositionUnit: data.notificationPositionUnit,
       });
-      const status = await sendPush(env, JSON.parse(row.subscription), {
+      const profile = await env.DB.prepare("SELECT settings FROM profiles WHERE user_id = ?").bind(user).first();
+      const privacy = cleanProfile(profile ? JSON.parse(profile.settings) : null).rules.pushPrivate;
+      const status = await sendPush(env, JSON.parse(row.subscription), await privatePush({
         ...sample, title: "测试 · " + sample.title, tag: "hyper-test", account: user,
-      });
+      }, privacy));
       await savePushHealth(env.DB, user, endpoint, status, true);
       if (status === "retry") return json({ error: "推送服务暂时限流，请稍后再试" }, 429);
       return status === "sent" ? json({ ok: true }) : json({ error: "设备订阅已过期" }, 410);
@@ -190,7 +195,21 @@ export default {
         if (!address || !row || !cleanProfile(JSON.parse(row.settings)).wallets.some(wallet => wallet.address === address)) {
           return json({ error: "请先将这个钱包保存到当前账户" }, 404);
         }
-        return marketResult(async () => ({ positions: await allPerpPositions(address) }));
+        return marketResult(async () => ({ positions: (await fullPositionSnapshot(address)).rows }));
+      }
+      if (route === "/api/ledger" && request.method === "GET") {
+        const address = addressOf(url.searchParams.get("wallet"));
+        const view = url.searchParams.get("view") ?? "summary";
+        const period = url.searchParams.get("period") ?? "today";
+        const time = url.searchParams.get("before"), id = url.searchParams.get("id");
+        if (!address || !ledgerViews.includes(view) || !ledgerPeriods.includes(period) ||
+          ((time !== null || id !== null) && (!time || !Number.isSafeInteger(Number(time)) || Number(time) < 0 || !id || id.length > 512))) {
+          return json({ error: "账本查询条件无效" }, 400);
+        }
+        const row = await env.DB.prepare("SELECT settings FROM profiles WHERE user_id = ?").bind(user).first();
+        const saved = row && cleanProfile(JSON.parse(row.settings)).wallets.some(wallet => wallet.address === address);
+        if (!saved) return json({ error: "请先将这个钱包保存到当前账户" }, 404);
+        return json(await readWalletLedger(env.DB, address, { view, period, before: id ? { time: Number(time), id } : null }));
       }
       if (route === "/api/run-alerts" && request.method === "POST") return json(await checkAlerts(env, user));
       if (route === "/api/alert-health" && request.method === "GET") {

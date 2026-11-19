@@ -17,6 +17,7 @@ function alertStore() {
     "CREATE TABLE alerts(user_id TEXT,event_id TEXT,title TEXT,body TEXT,created_at INTEGER,PRIMARY KEY(user_id,event_id));" +
     "CREATE TABLE transmissions(user_id TEXT,event_id TEXT,endpoint TEXT,PRIMARY KEY(user_id,event_id,endpoint));",
   );
+  sqlite.exec(readFileSync(new URL("../drizzle/0004_alert_details.sql", import.meta.url), "utf8"));
   const db = {
     prepare(sql) {
       const statement = sqlite.prepare(sql);

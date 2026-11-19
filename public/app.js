@@ -443,7 +443,11 @@ function renderHoldings() {
     mobile.append(card);
   }
   body.replaceChildren(table, mobile);
-  if (!spot) body.append(element("p", "position-risk-note", "仓位杠杆率＝该仓位价值 ÷ 账户总权益。强平价格由 Hyperliquid 估算。"));
+  if (!spot) {
+    body.append(element("p", "position-risk-note", "仓位杠杆率＝该仓位价值 ÷ 账户总权益。强平价格由 Hyperliquid 估算。"));
+    const row = s.focusCoin && list.find(row => row.coin === s.focusCoin);
+    if (row && focusPosition(positionKey(row))) s.focusCoin = null;
+  }
 }
 
 function renderAll() {
@@ -522,13 +526,13 @@ async function refreshOverviewActivity(s) {
   }
 }
 
-function openAccount(user, demo = false) {
+function openAccount(user, demo = false, focusCoin = null) {
   if (session) {
     session.controller.abort();
     session.disconnect?.();
   }
   const s = {
-    user, demo, controller: new AbortController(), errors: new Set(),
+    user, demo, focusCoin, controller: new AbortController(), errors: new Set(),
     history: null, positions: null, spot: null, requestedAt: 0, requesting: false,
     activity: null, activityNext: 0, activityPending: false, activityError: false,
     disconnect: null, streamAt: 0, scope: "", times: new Map(), problems: new Map(),
@@ -583,18 +587,22 @@ function changeOverviewRange(value, persist = true) {
 registerChoice("periods", "period", changeOverviewRange);
 registerChoice("series", "series", value => { series = value; renderChart(); });
 registerChoice("holdings-tabs", "tab", value => { tab = value; renderHoldings(); renderConnection(); });
+function focusPosition(key) {
+  const target = [...$("holdings-body").querySelectorAll("[data-position]")]
+    .find(node => node.dataset.position === key && node.getClientRects().length);
+  if (!target) return false;
+  target.focus({ preventScroll: true });
+  target.scrollIntoView({ block: "center" });
+  return true;
+}
+
 $("risk-closest-link").addEventListener("click", ({ currentTarget }) => {
   const key = currentTarget.dataset.position;
   if (!key) return;
   $("position-search").value = "";
   $("position-side").value = "all";
   $("holdings-tabs").querySelector('[data-tab="positions"]').click();
-  const target = [...$("holdings-body").querySelectorAll("[data-position]")]
-    .find(node => node.dataset.position === key && node.getClientRects().length);
-  if (target) {
-    target.focus({ preventScroll: true });
-    target.scrollIntoView({ block: "center" });
-  }
+  focusPosition(key);
 });
 $("position-search").addEventListener("input", renderHoldings);
 $("position-side").addEventListener("change", renderHoldings);
@@ -673,7 +681,7 @@ function togglePrivacy() {
   savePreference("private", masked);
   renderAll();
   renderRecentEvents();
-  workspace.refreshComparison();
+  workspace.refreshPrivacy();
 }
 $("privacy").addEventListener("click", togglePrivacy);
 $("mobile-privacy").addEventListener("click", togglePrivacy);
@@ -727,7 +735,13 @@ $("diagnostics").addEventListener("click", () => {
 });
 $("close-details").addEventListener("click", () => $("details-dialog").close());
 
-openAccount(addressOf(loadPreference("wallet", "")));
+const alertLink = new URLSearchParams(location.search);
+const alertWallet = account && addressOf(alertLink.get("wallet"));
+const alertCoin = alertLink.get("position");
+if (alertWallet) {
+  history.replaceState(null, "", location.pathname + location.hash);
+  openAccount(alertWallet, false, /^[a-z0-9:@._\/-]{1,64}$/i.test(alertCoin ?? "") ? alertCoin : null);
+} else openAccount(addressOf(loadPreference("wallet", "")));
 changeOverviewRange(period, false);
 const registration = account && "serviceWorker" in navigator ? navigator.serviceWorker.register("/sw.js").catch(() => null) : null;
 const workspace = setupWorkspace({

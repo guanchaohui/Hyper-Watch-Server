@@ -10,6 +10,8 @@ import worker from "./dist/server/index.js";
 import version from "./dist/server/version.js";
 import { checkAlerts } from "./dist/server/alerts.js";
 import { startFillStream } from "./dist/server/fill-stream.js";
+import { startLedgerSync } from "./dist/server/ledger-sync.js";
+import { startOrderStreams } from "./dist/server/order-stream.js";
 
 const publicUrl = new URL(process.env.PUBLIC_ORIGIN || "file:///");
 if (publicUrl.protocol !== "https:" || publicUrl.pathname !== "/" || publicUrl.search || publicUrl.hash ||
@@ -44,13 +46,17 @@ sqlite.exec(`
 `);
 const receiptsMigration = await readFile(new URL("./drizzle/0001_alert_receipts.sql", import.meta.url), "utf8");
 const tradeMigration = await readFile(new URL("./drizzle/0002_trade_alert_buffer.sql", import.meta.url), "utf8");
+const historyMigration = await readFile(new URL("./drizzle/0003_wallet_history.sql", import.meta.url), "utf8");
+const detailMigration = await readFile(new URL("./drizzle/0004_alert_details.sql", import.meta.url), "utf8");
 sqlite.exec("BEGIN IMMEDIATE");
 try {
   const schemaVersion = sqlite.prepare("PRAGMA user_version").get().user_version;
   if (schemaVersion < 1) sqlite.exec(receiptsMigration);
-  if (schemaVersion < 2) {
-    sqlite.exec(tradeMigration);
-    sqlite.exec("PRAGMA user_version = 2");
+  if (schemaVersion < 2) sqlite.exec(tradeMigration);
+  if (schemaVersion < 3) sqlite.exec(historyMigration);
+  if (schemaVersion < 4) {
+    sqlite.exec(detailMigration);
+    sqlite.exec("PRAGMA user_version = 4");
   }
   sqlite.exec("COMMIT");
 } catch (error) {
@@ -314,6 +320,8 @@ server.listen(port, process.env.HOST || "127.0.0.1", () => {
   console.log("Hyper 盯盘已启动，监听端口", port);
   const stopFillStream = startFillStream(workerEnv);
   server.once("close", stopFillStream);
+  server.once("close", startLedgerSync(DB));
+  server.once("close", startOrderStreams(DB));
   setTimeout(scheduledScan, 3000).unref();
   setInterval(scheduledScan, interval * 60000).unref();
 });

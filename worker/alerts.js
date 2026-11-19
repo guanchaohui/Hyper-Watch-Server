@@ -1,6 +1,8 @@
+import { planAdvancedRisk, privatePush, riskDetails } from "./advanced-risk.js";
+import { fullPositionSnapshot } from "./position-source.js";
 import { cleanProfile, day, gapToLiquidation, latestEquitySample, positionLeverage, walletName } from "./analytics.js";
 import { parsePortfolio, parsePositions } from "./market.js";
-import { allPerpPositions, hyperliquidInfo } from "./hyperliquid.js";
+import { hyperliquidInfo } from "./hyperliquid.js";
 import { accountEquityNotice, equitySampleFreshness, planEquityChange, planEquityVolatility, readEquityChangeBaseline } from "./equity-change-alerts.js";
 import { saveAlertHealth, savePushHealth } from "./alert-health.js";
 import { sendPush } from "./push.js";
@@ -80,16 +82,20 @@ async function watchRisk(db, user, wallet, rules, now) {
   const prior = await db.prepare("SELECT breached FROM alert_status WHERE user_id = ? AND target = ?").bind(user, target).first();
   const old = new Set(JSON.parse(prior?.breached ?? "[]"));
   const next = new Set(old);
-  const needsEquity = rules.equity || rules.equityChangeAlert || rules.equityVolatility || rules.leverageAlert;
+  const advanced = rules.advancedRisk;
+  const needsEquity = rules.equity || rules.equityChangeAlert || rules.equityVolatility || rules.leverageAlert ||
+    advanced?.marginUsage || advanced?.dailyLoss || advanced?.dataOutage;
+  const needsFullPositions = rules.gap || rules.leverageAlert || (advanced && Object.keys(advanced).some(key => key !== "dailyLoss" && key !== "cooldown"));
   const [equityResult, positionResult, leverageResult] = await Promise.allSettled([
     needsEquity ? hyperliquidInfo({ type: "portfolio", user: wallet.address }, true).then(parsePortfolio) : Promise.resolve(null),
     rules.loss || rules.gap ? hyperliquidInfo({ type: "clearinghouseState", user: wallet.address }, true).then(raw => parsePositions([["", raw]])) : Promise.resolve([]),
-    rules.leverageAlert ? allPerpPositions(wallet.address, true) : Promise.resolve(null),
+    needsFullPositions ? fullPositionSnapshot(wallet.address, true).then(snapshot => snapshot.rows) : Promise.resolve(null),
   ]);
   const observations = [];
   const statements = [];
   const equityReasons = [];
   const positionReasons = [];
+  const positionCoins = new Map();
   const sample = latestEquitySample(equityResult.value);
   const equity = sample?.[1] ?? null;
   let swing = null;
@@ -126,21 +132,27 @@ async function watchRisk(db, user, wallet, rules, now) {
       observations.push(["equity", rules.equity && equity <= rules.equity, formatEquityReason("amount", null, rules.equity)]);
     }
   }
-  if (positionResult.status === "fulfilled") {
+  if (positionResult.status === "fulfilled" || leverageResult.value) {
     const positions = positionResult.value;
-    if (positions.every(row => row.pnl !== null) || !rules.loss) {
+    if (positions && (positions.every(row => row.pnl !== null) || !rules.loss)) {
       const total = positions.reduce((sum, row) => sum + (row.pnl ?? 0), 0);
       observations.push(["loss", rules.loss && -total >= rules.loss, "合约净浮亏达到 " + money.format(-total)]);
     }
     const monitored = new Set();
-    if (rules.gap) for (const row of positions) {
+    if (rules.gap) for (const row of leverageResult.value ?? positions) {
       const gap = gapToLiquidation(row);
       if (gap === null) continue;
       const key = "gap:" + row.coin;
       monitored.add(key);
-      observations.push([key, gap <= rules.gap, row.coin + " 距离强平还剩 " + gap.toFixed(2) + "%"]);
+      const critical = "gap-critical:" + row.coin;
+      monitored.add(critical);
+      const text = row.coin + " 距离强平还剩 " + gap.toFixed(2) + "%";
+      observations.push([key, gap <= rules.gap, text]);
+      observations.push([critical, gap <= Math.min(5, rules.gap), text]);
     }
-    for (const key of old) if (key.startsWith("gap:") && !monitored.has(key)) next.delete(key);
+    for (const key of old) {
+      if ((key.startsWith("gap:") || key.startsWith("gap-critical:")) && !monitored.has(key) && (!rules.gap || leverageResult.status === "fulfilled")) next.delete(key);
+    }
   }
   for (const [key, breached, body] of observations) {
     if (!breached) next.delete(key);
@@ -148,16 +160,25 @@ async function watchRisk(db, user, wallet, rules, now) {
       next.add(key);
       if (!old.has(key)) {
         if (key === "equity" || key.startsWith("equity-percent:")) equityReasons.push(body);
-        else positionReasons.push(body);
+        else {
+          if (!positionReasons.includes(body)) positionReasons.push(body);
+          if (key.startsWith("gap:") || key.startsWith("gap-critical:")) {
+            const coin = key.slice(key.indexOf(":") + 1);
+            positionCoins.set(coin, gapToLiquidation((leverageResult.value ?? positionResult.value).find(row => row.coin === coin)));
+          }
+        }
       }
     }
   }
   if (positionReasons.length) {
-    statements.push(alertInsert(db, user, "risk:" + wallet.address + ":" + now,
-      positionReasons.join("\n"), now, "仓位风险 · " + walletName(wallet)));
+    const id = "risk:" + wallet.address + ":" + now;
+    const level = [...positionCoins.values()].some(gap => gap <= 5) ? "critical" : "warning";
+    const coin = positionCoins.size === 1 ? positionCoins.keys().next().value : null;
+    statements.push(alertInsert(db, user, id, positionReasons.join("\n"), now, "仓位风险 · " + walletName(wallet)),
+      riskDetails(db, user, id, wallet.address, level, coin));
   }
   const perps = leverageResult.value;
-  if (perps?.every(row => row.value !== null) && sample && sample[0] >= now - equitySampleFreshness) {
+  if (rules.leverageAlert && perps?.every(row => row.value !== null) && sample && sample[0] >= now - equitySampleFreshness) {
     const notional = perps.reduce((total, row) => total + row.value, 0);
     const leverage = positionLeverage(notional, equity);
     if (leverage !== null) {
@@ -166,14 +187,23 @@ async function watchRisk(db, user, wallet, rules, now) {
         next.add(leverageKey);
         if (!old.has(leverageKey)) {
           const notice = formatLeverageNotification(leverage, rules.leverageAlert, notional, equity);
-          statements.push(alertInsert(db, user, "leverage:" + wallet.address + ":" + now, notice.body, now, notice.title));
+          const id = "leverage:" + wallet.address + ":" + now;
+          statements.push(alertInsert(db, user, id, notice.body, now, notice.title),
+            riskDetails(db, user, id, wallet.address, leverage >= rules.leverageAlert * 2 ? "critical" : "warning"));
         }
       }
     }
   }
   if (swing || equityReasons.length) {
     const notice = await accountEquityNotice(wallet.address, equityResult.value, now, equity, equityReasons, swing);
-    statements.push(alertInsert(db, user, "equity:" + wallet.address + ":" + now, notice.body, now, notice.title));
+    const id = "equity:" + wallet.address + ":" + now;
+    statements.push(alertInsert(db, user, id, notice.body, now, notice.title),
+      riskDetails(db, user, id, wallet.address, equityReasons.some(reason => reason.includes("下跌") || reason.includes("低于") || reason.includes("回落")) ? "warning" : "info"));
+  }
+  if (rules.advancedRisk) {
+    statements.push(...await planAdvancedRisk(db, user, wallet, rules.advancedRisk, now, perps, equityResult.value, sample));
+  } else {
+    statements.push(db.prepare("DELETE FROM alert_status WHERE user_id = ? AND target = ?").bind(user, "advanced-risk:" + wallet.address));
   }
   statements.push(db.prepare("INSERT INTO alert_status VALUES (?, ?, ?, ?) ON CONFLICT(user_id, target) DO UPDATE SET cursor = excluded.cursor, breached = excluded.breached")
     .bind(user, target, now, JSON.stringify([...next])));
@@ -184,11 +214,14 @@ async function watchRisk(db, user, wallet, rules, now) {
 async function deliver(env, user, now, ensureLease) {
   const { results: devices } = await env.DB.prepare("SELECT endpoint, subscription FROM push_devices WHERE user_id = ?")
     .bind(user).all();
+  if (!devices.length) return 0;
+  const profile = await env.DB.prepare("SELECT settings FROM profiles WHERE user_id = ?").bind(user).first();
+  const privacy = cleanProfile(profile ? JSON.parse(profile.settings) : null).rules.pushPrivate;
   let sent = 0;
   for (const device of devices) {
     const subscription = JSON.parse(device.subscription);
     const { results: items } = await env.DB.prepare(
-      "SELECT a.event_id, a.title, a.body, a.created_at FROM alerts a WHERE a.user_id = ? AND a.created_at >= ? AND NOT EXISTS (SELECT 1 FROM transmissions t WHERE t.user_id = a.user_id AND t.event_id = a.event_id AND t.endpoint = ?) ORDER BY a.created_at LIMIT 25",
+      "SELECT a.event_id, a.title, a.body, a.created_at, d.details FROM alerts a LEFT JOIN alert_details d USING (user_id,event_id) WHERE a.user_id = ? AND a.created_at >= ? AND NOT EXISTS (SELECT 1 FROM transmissions t WHERE t.user_id = a.user_id AND t.event_id = a.event_id AND t.endpoint = ?) ORDER BY a.created_at LIMIT 25",
     ).bind(user, Math.max(subscription.since, now - day), device.endpoint).all();
     for (const item of items) {
       if (!await ensureLease()) return sent;
@@ -196,14 +229,16 @@ async function deliver(env, user, now, ensureLease) {
       const body = reasons.length > 4 ? reasons.slice(0, 4).join("\n") +
         "\n另有 " + (reasons.length - 4) + " 项，打开提醒记录查看。" : item.body;
       try {
-        const result = await sendPush(env, subscription, {
+        const details = item.details ? JSON.parse(item.details) : null;
+        const result = await sendPush(env, subscription, await privatePush({
           title: item.title || "盯盘提醒",
           body,
           timestamp: item.created_at,
-          urgency: item.title ? "high" : "normal",
+          urgency: details ? (details.level === "critical" ? "high" : "normal") : item.title ? "high" : "normal",
           tag: item.event_id,
           account: user,
-        });
+          path: details?.path,
+        }, privacy));
         if (result === "sent") {
           await env.DB.prepare("INSERT OR IGNORE INTO transmissions VALUES (?, ?, ?)")
             .bind(user, item.event_id, device.endpoint).run();
@@ -283,7 +318,7 @@ async function checkProfile(env, profile, now, background) {
     const targets = wallets.filter(wallet => wallet.notify && rules.actions.length);
     const mine = wallets.find(wallet => wallet.role === "mine");
     const jobs = targets.map(wallet => watchFills(env.DB, user, wallet, rules, now));
-    if (mine && (rules.equity || rules.loss || rules.gap || rules.equityChangeAlert || rules.equityVolatility || rules.leverageAlert)) {
+    if (mine && (rules.equity || rules.loss || rules.gap || rules.equityChangeAlert || rules.equityVolatility || rules.leverageAlert || rules.advancedRisk)) {
       jobs.push(watchRisk(env.DB, user, mine, rules, now));
     }
     const outcomes = await Promise.allSettled(jobs);
@@ -321,8 +356,7 @@ export async function checkAlerts(env, account) {
   if (!account) {
     await env.DB.batch([
       env.DB.prepare("DELETE FROM trade_alert_buffer WHERE finalized = 1 AND trade_at < ?").bind(now - day * 14),
-      env.DB.prepare("DELETE FROM transmissions WHERE NOT EXISTS (SELECT 1 FROM alerts a WHERE a.user_id = transmissions.user_id AND a.event_id = transmissions.event_id AND a.created_at >= ?)").bind(now - day * 14),
-      env.DB.prepare("DELETE FROM alerts WHERE created_at < ?").bind(now - day * 14),
+      env.DB.prepare("DELETE FROM transmissions WHERE NOT EXISTS (SELECT 1 FROM alerts a WHERE a.user_id = transmissions.user_id AND a.event_id = transmissions.event_id)"),
     ]);
   }
   return summary;

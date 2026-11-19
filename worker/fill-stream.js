@@ -1,10 +1,20 @@
 import { addressOf, cleanProfile } from "./analytics.js";
 import { queueAlertDelivery } from "./alerts.js";
 import { flushFillAlerts, recordFillAlerts } from "./trade-alerts.js";
+import { recordMarketRows } from "./market-ledger.js";
+import { parsePositions } from "./market.js";
+import { rememberPositions, forgetPositions } from "./position-source.js";
 
 const url = "wss://api.hyperliquid.xyz/ws";
 const maxAddresses = 10;
 const initialRetry = 2500;
+const channels = ["userFills", "userFundings", "userNonFundingLedgerUpdates", "allDexsClearinghouseState"];
+
+function sendForWallet(socket, method, user) {
+  for (const type of channels) {
+    socket.send(JSON.stringify({ method, subscription: { type, user, ...(type === "userFills" ? { aggregateByTime: false } : {}) } }));
+  }
+}
 
 export function startFillStream(env) {
   let targets = new Map();
@@ -22,13 +32,14 @@ export function startFillStream(env) {
     const next = new Set([...targets.keys()].slice(0, maxAddresses));
     for (const user of subscribed) {
       if (next.has(user)) continue;
-      socket.send(JSON.stringify({ method: "unsubscribe", subscription: { type: "userFills", user, aggregateByTime: false } }));
+      sendForWallet(socket, "unsubscribe", user);
+      forgetPositions(user);
       subscribed.delete(user);
       acknowledged.delete(user);
     }
     for (const user of next) {
       if (subscribed.has(user)) continue;
-      socket.send(JSON.stringify({ method: "subscribe", subscription: { type: "userFills", user, aggregateByTime: false } }));
+      sendForWallet(socket, "subscribe", user);
       subscribed.add(user);
     }
   }
@@ -58,9 +69,25 @@ export function startFillStream(env) {
       console.warn("实时成交订阅返回错误，保留定时补漏。");
       return;
     }
-    if (channel !== "userFills" || data?.isSnapshot === true || !Array.isArray(data?.fills)) return;
-    const address = addressOf(data.user);
+    const address = addressOf(data?.user);
     if (!subscribed.has(address)) return;
+    if (channel === "allDexsClearinghouseState") {
+      rememberPositions(address, parsePositions(data.clearinghouseStates));
+      return;
+    }
+    if (channel === "userFundings") {
+      await recordMarketRows(env.DB, address, "funding", data.fundings);
+      return;
+    }
+    if (channel === "userNonFundingLedgerUpdates") {
+      await recordMarketRows(env.DB, address, "ledger", data.nonFundingLedgerUpdates ?? data.ledgerUpdates);
+      return;
+    }
+    if (channel !== "userFills" || !Array.isArray(data.fills)) return;
+    // Archiving must never prevent the existing real-time reminder path.
+    await recordMarketRows(env.DB, address, "fill", data.fills)
+      .catch(() => console.warn("实时成交存档稍后由 REST 补齐。"));
+    if (data.isSnapshot === true) return;
     const watchers = targets.get(address) ?? [];
     const outcomes = await Promise.allSettled(watchers.map(async ({ user, wallet, rules }) => {
       if (await recordFillAlerts(env.DB, user, wallet, rules, data.fills)) {
@@ -98,6 +125,7 @@ export function startFillStream(env) {
     current.addEventListener("close", () => {
       if (socket !== current) return;
       socket = undefined;
+      for (const address of subscribed) forgetPositions(address);
       subscribed.clear();
       acknowledged.clear();
       retryConnection();
@@ -110,8 +138,14 @@ export function startFillStream(env) {
     const next = new Map();
     const nextKeys = new Set();
     const newWatches = [];
+    const allAddresses = new Set();
+    const ownAddresses = new Set();
     for (const { user_id: user, settings } of results) {
       const { wallets, rules } = cleanProfile(JSON.parse(settings));
+      for (const wallet of wallets) {
+        allAddresses.add(wallet.address);
+        if (wallet.role === "mine") ownAddresses.add(wallet.address);
+      }
       if (!rules.actions.length) continue;
       for (const wallet of wallets.filter(wallet => wallet.notify)) {
         if (!next.has(wallet.address)) next.set(wallet.address, []);
@@ -123,6 +157,9 @@ export function startFillStream(env) {
             .bind(user, "fills:" + wallet.address, Date.now() - 3000));
         }
       }
+    }
+    for (const address of [...ownAddresses, ...allAddresses]) {
+      if (!next.has(address)) next.set(address, []);
     }
     if (newWatches.length) await env.DB.batch(newWatches);
     if (stopped) return;

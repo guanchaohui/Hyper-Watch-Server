@@ -2,8 +2,40 @@
   "version": "7",
   "dialect": "sqlite",
   "entries": [
-    {"idx":0,"version":"6","when":1794972700000,"tag":"0000_watchlist","breakpoints":true},
-    {"idx":1,"version":"6","when":1795059100000,"tag":"0001_alert_receipts","breakpoints":true},
-    {"idx":2,"version":"6","when":1795062700000,"tag":"0002_trade_alert_buffer","breakpoints":true}
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1794972700000,
+      "tag": "0000_watchlist",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1795059100000,
+      "tag": "0001_alert_receipts",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1795062700000,
+      "tag": "0002_trade_alert_buffer",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1795070000003,
+      "tag": "0003_wallet_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1795070000004,
+      "tag": "0004_alert_details",
+      "breakpoints": true
+    }
   ]
 }

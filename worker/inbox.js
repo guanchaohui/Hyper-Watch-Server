@@ -14,11 +14,12 @@ export async function readInbox(db, user, { kind, unread, before }) {
     bindings.push(before.time, before.id);
   }
   const { results } = await db.prepare(
-    "SELECT a.event_id AS id, a.title, a.body, a.created_at AS time, r.read_at AS readAt FROM alerts a " +
+    "SELECT a.event_id AS id, a.title, a.body, a.created_at AS time, r.read_at AS readAt, d.details FROM alerts a " +
     "LEFT JOIN alert_reads r ON r.user_id = a.user_id AND r.event_id = a.event_id " +
+    "LEFT JOIN alert_details d ON d.user_id = a.user_id AND d.event_id = a.event_id " +
     "WHERE " + clauses.join(" AND ") + " ORDER BY a.created_at DESC, a.event_id DESC LIMIT ?",
   ).bind(...bindings, pageSize + 1).all();
-  const items = results.slice(0, pageSize);
+  const items = results.slice(0, pageSize).map(row => ({ ...row, details: row.details ? JSON.parse(row.details) : null }));
   const last = items.at(-1);
   return { items, next: results.length > pageSize ? { time: last.time, id: last.id } : null };
 }
