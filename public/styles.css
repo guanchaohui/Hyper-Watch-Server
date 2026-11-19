@@ -268,15 +268,10 @@ dialog input[aria-invalid="true"] { border-color: var(--pink); }
   .mobile-holding + .mobile-holding { border-top: 1px solid var(--quiet-line); }
   .mobile-holding-top { display: flex; justify-content: space-between; align-items: center; gap: 5px; }
   .mobile-holding dl { margin: 7px 0 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
-  .mobile-holding:not(.spot) { padding: 5px 8px 6px; }
   .mobile-holding:not(.spot) .coin { gap: 5px; }
   .mobile-holding:not(.spot) .coin-icon { width: 21px; height: 21px; font-size: 11px; }
   .mobile-holding:not(.spot) .direction { padding: 1px 4px; }
-  .mobile-holding:not(.spot) dl { margin-top: 3px; gap: 4px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .mobile-holding:not(.spot) .position-risk-fields { grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--quiet-line); padding-top: 3px; }
   .mobile-holding-top .position-pnl { margin-left: auto; font-size: 12px; }
-  .mobile-holding .position-risk-fields dt { white-space: normal; line-height: 1.2; }
-  .mobile-holding:not(.spot) .mobile-field dd { margin-top: 0; }
   .position-risk-note { padding-inline: 10px; }
   .mobile-holding.spot dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .mobile-field dt { color: var(--muted); font-size: 10px; white-space: nowrap; }

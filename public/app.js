@@ -359,15 +359,11 @@ function leverage(value, equity) {
   return ratio === null ? "—" : masked ? mask : ratio.toFixed(2) + "×";
 }
 
-function liquidationPrice(row) {
-  if (!row.liquidationText) return "—";
-  return masked ? mask : "$" + row.liquidationText;
-}
-
-function cardLiquidation(price) {
-  const line = element("div", "holding-risk-line");
-  line.append(element("span", "", "预估强平价"), element("strong", "", price));
-  return line;
+function holdingPrice(value) {
+  const price = Number(value);
+  if (!Number.isFinite(price) || price <= 0) return "—";
+  if (masked) return mask;
+  return price < 0.005 ? "<$0.01" : cash.format(price);
 }
 
 function positionPnl(row) {
@@ -390,9 +386,7 @@ function addHoldingField(fields, label, value) {
 function renderHoldings() {
   const s = session;
   const body = $("holdings-body");
-  const openCards = new Set([...body.querySelectorAll(".holding-details[open]")].map(details => details.parentElement.dataset.position));
   const focused = body.contains(document.activeElement) ? document.activeElement.closest("[data-position]")?.dataset.position : null;
-  const focusedSummary = focused && document.activeElement.tagName === "SUMMARY";
   body.dataset.asOf = s.times.get("positions") ?? "";
   $("spot-count").textContent = s.spot?.length ?? "—";
   const spot = tab === "spot";
@@ -433,12 +427,12 @@ function renderHoldings() {
   }
 
   const rows = table.createTBody();
-  const mobile = element("div", "mobile-holdings");
+  const mobile = element("div", "mobile-holdings" + (spot ? "" : "contract-cards"));
   const equity = spot ? null : portfolioBrief(s.history).equity;
   for (const row of list) {
     const fieldValues = spot
       ? [quantity(row.total), quantity(row.hold)]
-      : [quantity(Math.abs(row.size)), amount(row.entry), amount(row.mark)];
+      : [quantity(Math.abs(row.size)), holdingPrice(row.entry), holdingPrice(row.mark)];
 
     const tr = rows.insertRow();
     tr.insertCell().append(coinCell(row.coin, row.dex));
@@ -446,40 +440,40 @@ function renderHoldings() {
     for (const value of fieldValues) tr.insertCell().textContent = value;
     if (!spot) tr.insertCell().append(positionPnl(row));
 
-    const card = element("article", "mobile-holding" + (spot ? " spot" : ""));
+    const card = element("article", "mobile-holding" + (spot ? " spot" : " position-card"));
     const top = element("div", "mobile-holding-top");
-    top.append(coinCell(row.coin, row.dex));
-    if (!spot) top.append(sideCell(row), positionPnl(row));
-    const fields = element("dl");
+    const coin = coinCell(row.coin, row.dex);
+    const fields = element("dl", spot ? "" : "position-card-fields");
     fieldValues.forEach((value, index) => {
       addHoldingField(fields, columns[index + (spot ? 1 : 2)], value);
     });
-    card.append(top);
-    if (spot) card.append(fields);
+
+    if (spot) top.append(coin);
     else {
       tr.dataset.position = card.dataset.position = positionKey(row);
       tr.tabIndex = card.tabIndex = -1;
-      const price = liquidationPrice(row);
-      const risk = [["保证金占用", amount(row.margin)], ["仓位杠杆率", leverage(row.value, equity)]];
+      const identity = element("div", "holding-card-identity");
+      identity.append(coin, sideCell(row));
+      top.append(identity, positionPnl(row));
+
       const detail = rows.insertRow();
       detail.className = "position-risk-row";
       const cell = detail.insertCell();
       cell.colSpan = columns.length;
       const desktopFields = element("dl", "position-risk-fields");
-      const mobileFields = element("dl", "position-risk-fields");
       desktopFields.setAttribute("aria-label", row.coin + " 持仓风险");
-      mobileFields.setAttribute("aria-label", row.coin + " 持仓风险");
-      for (const field of risk) {
-        addHoldingField(desktopFields, ...field);
-        addHoldingField(mobileFields, ...field);
+      const details = [
+        ["预估强平价", holdingPrice(row.liquidationText)],
+        ["保证金占用", amount(row.margin)],
+        ["仓位杠杆率", leverage(row.value, equity)],
+      ];
+      for (const [label, value] of details) {
+        addHoldingField(fields, label, value);
+        addHoldingField(desktopFields, label, value);
       }
-      addHoldingField(desktopFields, "预估强平价", price);
       cell.append(desktopFields);
-      const breakdown = element("details", "holding-details");
-      breakdown.open = openCards.has(card.dataset.position);
-      breakdown.append(element("summary", "", "仓位详情"), fields, mobileFields);
-      card.append(cardLiquidation(price), breakdown);
     }
+    card.append(top, fields);
     mobile.append(card);
   }
   body.replaceChildren(table, mobile);
@@ -487,7 +481,7 @@ function renderHoldings() {
     body.append(element("p", "position-risk-note", "仓位杠杆率＝该仓位价值 ÷ 账户总权益。预估强平价来自 Hyperliquid。"));
     if (focused) {
       const target = [...body.querySelectorAll("[data-position]")].find(node => node.dataset.position === focused && node.getClientRects().length);
-      (focusedSummary ? target?.querySelector("summary") : target)?.focus({ preventScroll: true });
+      target?.focus({ preventScroll: true });
     }
     const row = s.focusCoin && list.find(row => row.coin === s.focusCoin);
     if (row && focusPosition(positionKey(row))) s.focusCoin = null;

@@ -133,12 +133,9 @@
 }
 .holdings-tools .field input, .holdings-tools .field select { min-height: 34px; padding-block: 4px; }
 .holdings-body[data-layout="cards"] > table { display: none; }
-.holdings-body[data-layout="cards"] .mobile-holdings { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(270px, 100%), 1fr)); gap: 6px; padding: 8px; }
-.holdings-body[data-layout="cards"] .mobile-holding { padding: 8px 10px; border: 1px solid var(--quiet-line); border-radius: 8px; min-width: 0; }
-.holdings-body[data-layout="cards"] .mobile-holding-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
-.holdings-body[data-layout="cards"] .mobile-holding dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; margin: 5px 0 0; }
-.holdings-body[data-layout="cards"] .mobile-field dt { color: var(--muted); font-size: 10px; }
-.holdings-body[data-layout="cards"] .mobile-field dd { margin: 1px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.holdings-body[data-layout="cards"] > .mobile-holdings {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(290px, 100%), 1fr)); gap: 7px; padding: 8px;
+}
 .watch-flags { display: flex; gap: 8px; }
 .watch-flags [aria-pressed="true"] { color: var(--mint); }
 .compare-choices { margin: 0 0 10px; border: 1px solid var(--quiet-line); border-radius: 8px; padding: 0 10px; min-width: 0; }
@@ -243,13 +240,23 @@
 .chart-coverage { margin: 0 0 2px; }
 #dashboard[data-section="positions"] > :is(.metrics, .risk-cockpit, .overview, .account-events, .overview-comparison) { display: none; }
 #dashboard[data-section="positions"] .holdings { order: 1; }
-.holding-risk-line {
-  display: flex; flex-wrap: wrap; gap: 5px 9px; align-items: center;
-  margin: 6px 0 1px; color: var(--muted); font-size: 12px;
+.mobile-holdings .position-card {
+  border: 1px solid var(--quiet-line); border-radius: 10px; background: var(--panel-raised);
+  padding: 8px 10px; min-width: 0;
 }
-.holding-risk-line strong { color: var(--text); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.holding-details summary { cursor: pointer; color: var(--muted); font-size: 11px; padding: 7px 0 3px; }
-.holding-details .position-risk-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.position-card .mobile-holding-top { display: flex; align-items: flex-start; gap: 8px; justify-content: space-between; }
+.holding-card-identity { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.position-card .position-pnl { margin-left: auto; max-width: 54%; text-align: right; }
+.position-card .position-pnl-amount { white-space: normal; overflow-wrap: anywhere; }
+.position-card .position-card-fields {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px 9px;
+  border-top: 1px solid var(--line); margin: 6px 0 0; padding-top: 5px;
+}
+.position-card-fields dt { color: var(--muted); font-size: 10px; white-space: normal; }
+.position-card-fields dd {
+  margin: 0; color: var(--text); font-size: 12px; line-height: 1.3;
+  font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
+}
 #position-count { white-space: nowrap; }
 
 @media (max-width: 780px), (display-mode: standalone) and (max-width: 980px) {
@@ -282,10 +289,10 @@
   .holdings-tools input[type="search"] { font-size: 16px; }
   .holdings-body[data-layout="auto"] > .holdings-table { display: none; }
   .holdings-body[data-layout="auto"] > .mobile-holdings { display: block; }
+  .holdings-body[data-layout="auto"] > .contract-cards { display: grid; gap: 6px; padding: 7px; }
   .holdings-body[data-layout="table"] > .holdings-table { display: table; min-width: 510px; }
   .holdings-body[data-layout="table"] > .mobile-holdings { display: none; }
   .holdings-body[data-layout="table"] { overflow-x: auto; }
-  .holding-details summary { min-height: 32px; }
 }
 
 .sr-only {
