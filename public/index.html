@@ -111,7 +111,13 @@
           <h2><span class="icon metric-icon" data-icon="layers" aria-hidden="true"></span>账户权益</h2>
           <button class="eye" id="privacy" type="button" aria-label="隐藏金额" aria-pressed="false" title="隐藏金额"><span class="icon" id="privacy-icon" data-icon="eye" aria-hidden="true"></span></button>
         </div>
-        <div class="metric-number" id="equity">—</div>
+        <div class="equity-readout">
+          <div class="metric-number" id="equity">—</div>
+          <figure class="equity-sparkline" id="equity-sparkline" hidden>
+            <div class="equity-sparkline-plot"><canvas id="equity-sparkline-canvas" role="img"></canvas></div>
+            <figcaption id="equity-sparkline-range"></figcaption>
+          </figure>
+        </div>
         <div class="metric-foot" id="equity-note">Hyperliquid 账户估值</div>
       </article>
       <article class="metric" id="today-pinned" data-overview-card="today" data-overview-label="今日净盈亏" hidden>

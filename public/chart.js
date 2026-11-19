@@ -36,6 +36,102 @@ function axisMoney(value, step) {
   return new Intl.NumberFormat("en", { maximumFractionDigits: digits }).format(value);
 }
 
+function sizeCanvas(canvas, ctx) {
+  const width = canvas.parentElement.clientWidth;
+  const height = canvas.parentElement.clientHeight;
+  if (!width || !height || !ctx) return null;
+  const ratio = window.devicePixelRatio || 1;
+  const pixelWidth = Math.round(width * ratio);
+  const pixelHeight = Math.round(height * ratio);
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+  }
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  return { width, height };
+}
+
+function drawTrend(ctx, points, { gap, color, x, y, top, bottom, stroke = 2 }) {
+  const gradient = ctx.createLinearGradient(0, top, 0, bottom);
+  gradient.addColorStop(0, color + "45");
+  gradient.addColorStop(1, color + "03");
+  const segments = [];
+  let segment = [];
+  for (const point of points) {
+    if (segment.length && point[0] - segment.at(-1)[0] > gap) {
+      segments.push(segment);
+      segment = [];
+    }
+    segment.push(point);
+  }
+  segments.push(segment);
+  ctx.lineWidth = stroke;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  for (const group of segments) {
+    if (group.length === 1) {
+      ctx.beginPath();
+      ctx.fillStyle = color;
+      ctx.arc(x(group[0][0]), y(group[0][1]), stroke + .5, 0, Math.PI * 2);
+      ctx.fill();
+      continue;
+    }
+    const path = new Path2D();
+    group.forEach(([time, value], i) => {
+      if (i === 0) path.moveTo(x(time), y(value));
+      else path.lineTo(x(time), y(value));
+    });
+    const area = new Path2D(path);
+    area.lineTo(x(group.at(-1)[0]), bottom);
+    area.lineTo(x(group[0][0]), bottom);
+    area.closePath();
+    ctx.fillStyle = gradient;
+    ctx.fill(area);
+    ctx.strokeStyle = color;
+    ctx.stroke(path);
+  }
+}
+
+const equityRanges = { today: "今日", day: "24 小时", week: "7 天", month: "30 天", allTime: "全部" };
+
+export function createEquitySparkline(canvas, figure, caption) {
+  const ctx = canvas.getContext("2d");
+  let points = [];
+  let gap = Infinity;
+
+  function draw() {
+    if (figure.hidden) return;
+    const size = sizeCanvas(canvas, ctx);
+    if (!size) return;
+    const { width, height } = size;
+    const first = points[0][0];
+    const last = points.at(-1)[0];
+    const scale = axisScale(points);
+    const top = 3, bottom = height - 3;
+    const x = at => 3 + (at - first) / (last - first) * (width - 6);
+    const y = value => bottom - (value - scale.min) / (scale.max - scale.min) * (bottom - top);
+    const color = "#83f7c6";
+    drawTrend(ctx, points, { gap, color, x, y, top, bottom, stroke: 1.5 });
+    ctx.beginPath();
+    ctx.fillStyle = color;
+    ctx.arc(x(last), y(points.at(-1)[1]), 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  new ResizeObserver(draw).observe(canvas.parentElement);
+  return (samples, period, maxGap) => {
+    points = samples;
+    gap = maxGap;
+    figure.hidden = points.length < 2 || points[0][0] === points.at(-1)[0];
+    if (figure.hidden) return;
+    const label = equityRanges[period];
+    caption.textContent = label;
+    canvas.setAttribute("aria-label", label + "账户权益走势，" + points.length + " 个样本");
+    draw();
+  };
+}
+
 export function createChart(canvas, empty, tooltip, timeLabel, valueLabel) {
   const ctx = canvas.getContext("2d");
   const wrapper = canvas.parentElement;
@@ -45,18 +141,9 @@ export function createChart(canvas, empty, tooltip, timeLabel, valueLabel) {
 
   function draw() {
     const { points, series, period, masked, emptyText, gap = Infinity } = settings;
-    const width = wrapper.clientWidth;
-    const height = wrapper.clientHeight;
-    if (!width || !height || !ctx) return;
-    const ratio = window.devicePixelRatio || 1;
-    const pixelWidth = Math.round(width * ratio);
-    const pixelHeight = Math.round(height * ratio);
-    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
-      canvas.width = pixelWidth;
-      canvas.height = pixelHeight;
-    }
-    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    ctx.clearRect(0, 0, width, height);
+    const size = sizeCanvas(canvas, ctx);
+    if (!size) return;
+    const { width, height } = size;
     ctx.font = "11px system-ui, sans-serif";
     ctx.textBaseline = "middle";
     const scale = axisScale(points);
@@ -102,43 +189,7 @@ export function createChart(canvas, empty, tooltip, timeLabel, valueLabel) {
     }
 
     const color = series === "equity" ? "#83f7c6" : "#b39bf7";
-    const gradient = ctx.createLinearGradient(0, plot.top, 0, plot.bottom);
-    gradient.addColorStop(0, color + "45");
-    gradient.addColorStop(1, color + "03");
-    const segments = [];
-    let segment = [];
-    for (const point of points) {
-      if (segment.length && point[0] - segment.at(-1)[0] > gap) {
-        segments.push(segment);
-        segment = [];
-      }
-      segment.push(point);
-    }
-    segments.push(segment);
-    ctx.lineWidth = 2;
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
-    for (const group of segments) {
-      const path = new Path2D();
-      group.forEach(([time, value], i) => {
-        if (i === 0) path.moveTo(x(time), y(value));
-        else path.lineTo(x(time), y(value));
-      });
-      const area = new Path2D(path);
-      area.lineTo(x(group.at(-1)[0]), plot.bottom);
-      area.lineTo(x(group[0][0]), plot.bottom);
-      area.closePath();
-      ctx.fillStyle = gradient;
-      ctx.fill(area);
-      ctx.strokeStyle = color;
-      ctx.stroke(path);
-      if (group.length === 1) {
-        ctx.beginPath();
-        ctx.fillStyle = color;
-        ctx.arc(x(group[0][0]), y(group[0][1]), 2.5, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
+    drawTrend(ctx, points, { gap, color, x, y, top: plot.top, bottom: plot.bottom });
 
     const point = points[hovered] ?? points.at(-1);
     const px = x(point[0]);

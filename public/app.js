@@ -1,7 +1,7 @@
 import { setupOverviewLayout } from "./overview-layout.js";
 import { formatMoney } from "./format-values.js";
 import { movedPositionOrder, orderPositions, positionKey, setupCardOrdering } from "./position-order.js";
-import { createChart } from "./chart.js";
+import { createChart, createEquitySparkline } from "./chart.js";
 import { setupWorkspace } from "./workspace.js";
 import { filterPositions, periodPnl, portfolioBrief, portfolioPeriodPoints, positionLeverage,
   positionTotals, todayGap, todayPortfolio, utc8DayStart } from "./analytics.js";
@@ -52,6 +52,7 @@ const activityEvery = 60_000;
 const positionStaleAfter = 45_000;
 const mask = "••••••";
 const drawChart = createChart($("chart"), $("chart-empty"), $("chart-tooltip"), $("tooltip-time"), $("tooltip-value"));
+const drawEquitySparkline = createEquitySparkline($("equity-sparkline-canvas"), $("equity-sparkline"), $("equity-sparkline-range"));
 
 function loadPreference(key, fallback) {
   try { return JSON.parse(localStorage.getItem(preferenceBase + key)) ?? fallback; }
@@ -306,7 +307,11 @@ function renderExposure() {
 function renderChart() {
   const s = session;
   const today = period === "today" ? todayData(s) : null;
-  const points = today ? today.points[series] : portfolioPeriodPoints(s.history, period, series);
+  const gap = today ? todayGap : Infinity;
+  const equityPoints = today ? today.points.equity : portfolioPeriodPoints(s.history, period, "equity");
+  const points = series === "equity" ? equityPoints :
+    today ? today.points.pnl : portfolioPeriodPoints(s.history, period, "pnl");
+  drawEquitySparkline(equityPoints, period, gap);
   const start = series === "equity" ? today?.equityStart : today?.pnlStart;
   const hasGap = today && points.some(([at], index) => index > 0 && at - points[index - 1][0] > todayGap);
   const coverage = $("chart-coverage");
@@ -320,7 +325,7 @@ function renderChart() {
   }
   const emptyText = today && series === "pnl" && today.pnlStart !== null ? todayNote(today) :
     s.errors.has("history") ? "暂时无法读取账户历史" : s.history ? "暂无此区间的历史样本" : "正在读取历史样本…";
-  drawChart({ points, series, period, masked, emptyText, gap: today ? todayGap : Infinity });
+  drawChart({ points, series, period, masked, emptyText, gap });
 }
 
 function element(tag, className, value) {
