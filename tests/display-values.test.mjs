@@ -55,3 +55,15 @@ test("卡片排序按市场和币种区分，保留暂未持有的卡片顺序",
   assert.equal(movedPositionOrder(rows, [], a, absent, false), null);
   assert.deepEqual(orderPositions(rows, []), rows);
 });
+
+test("总览布局保留自定义顺序并补入新增模块", async () => {
+  const { overviewKeys, savedOverviewKeys } = await import("../public/overview-layout.js");
+  const desktop = overviewKeys(false, false);
+  const phone = overviewKeys(true, false);
+  assert.equal(desktop.at(-1), "events");
+  assert.ok(phone.indexOf("positions") < phone.indexOf("trend"));
+  const order = savedOverviewKeys(desktop, ["positions", "trend", "positions", "retired"]);
+  assert.deepEqual(order.slice(0, 2), ["positions", "trend"]);
+  assert.equal(new Set(order).size, desktop.length);
+  assert.deepEqual(savedOverviewKeys(phone, null), phone);
+});

@@ -133,6 +133,7 @@ export function setupWorkspace(ui) {
     ui.store("workspace", profile);
     ui.store("workspace-pending", dirty);
     document.body.classList.toggle("quick-mode", profile.quick);
+    ui.syncOverview();
     $("toggle-quick").setAttribute("aria-pressed", String(profile.quick));
     $("mobile-quick").setAttribute("aria-pressed", String(profile.quick));
     $("mobile-quick-label").textContent = profile.quick ? "退出快看" : "快看";
@@ -849,6 +850,7 @@ export function setupWorkspace(ui) {
     const dashboardView = active === "over" || active === "positions";
     $("dashboard").hidden = !dashboardView;
     $("dashboard").dataset.section = active;
+    ui.syncOverview();
     $("page-title").textContent = active === "positions" ? "持仓" : "钱包总览";
     $("mobile-shortcuts").hidden = !dashboardView;
     viewRoot.hidden = dashboardView;

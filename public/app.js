@@ -1,3 +1,4 @@
+import { setupOverviewLayout } from "./overview-layout.js";
 import { formatMoney } from "./format-values.js";
 import { movedPositionOrder, orderPositions, positionKey, setupCardOrdering } from "./position-order.js";
 import { createChart } from "./chart.js";
@@ -78,6 +79,7 @@ let autoRefresh = loadPreference("auto-refresh", true) !== false;
 let period = pnlSummarySelect.value;
 let series = "equity";
 let tab = "positions";
+let filtersOpen = false;
 let session;
 
 function amount(value, options) {
@@ -427,6 +429,19 @@ function appendHoldingRow(table, row, values, details) {
   cell.append(fields);
 }
 
+function orderingGrip(label) {
+  const grip = element("button", "position-grip");
+  grip.type = "button";
+  grip.dataset.positionGrip = "";
+  grip.title = "拖动排列，也可按方向键";
+  grip.setAttribute("aria-label", "调整 " + label + "位置");
+  const icon = element("span", "icon");
+  icon.setAttribute("aria-hidden", "true");
+  setIcon(icon, "grip");
+  grip.append(icon);
+  return grip;
+}
+
 function appendHoldingCard(container, row, columns, values, details, movable) {
   const card = element("article", "mobile-holding" + (details ? " position-card" : " spot"));
   const top = element("div", "mobile-holding-top");
@@ -438,18 +453,7 @@ function appendHoldingCard(container, row, columns, values, details, movable) {
     card.tabIndex = -1;
     const identity = element("div", "holding-card-identity");
     identity.append(coin, sideCell(row));
-    if (movable) {
-      const grip = element("button", "position-grip");
-      grip.type = "button";
-      grip.dataset.positionGrip = "";
-      grip.title = "拖动排列，也可按方向键";
-      grip.setAttribute("aria-label", "调整 " + row.coin + " 卡片位置");
-      const icon = element("span", "icon");
-      icon.setAttribute("aria-hidden", "true");
-      setIcon(icon, "grip");
-      grip.append(icon);
-      top.append(grip);
-    }
+    if (movable) top.append(orderingGrip(row.coin + " 卡片"));
     top.append(identity, positionPnl(row));
     for (const field of details) addHoldingField(fields, ...field);
   } else top.append(coin);
@@ -479,7 +483,11 @@ function renderHoldings() {
     if ($("position-filter-status").textContent !== status) $("position-filter-status").textContent = status;
   }
   $("position-search-clear").hidden = !query;
-  $("holdings-tools").hidden = spot || (!raw?.length && !filtered);
+  const filterToggle = $("toggle-position-filters");
+  filterToggle.hidden = spot || (!raw?.length && !filtered);
+  filterToggle.setAttribute("aria-expanded", String(filtersOpen));
+  filterToggle.textContent = filtersOpen ? "收起" : filtered ? "筛选 · 已启用" : "筛选";
+  $("holdings-tools").hidden = filterToggle.hidden || !filtersOpen;
   const preference = spot ? "auto" : positionLayout.value;
   const cards = preference === "cards" || (preference !== "table" && cardMedia.matches);
   body.dataset.layout = cards ? "cards" : "table";
@@ -529,6 +537,7 @@ function renderAll() {
   const empty = !session.user && !session.demo;
   $("dashboard-empty").hidden = !empty;
   for (const pane of document.querySelectorAll("[data-wallet-detail]")) pane.hidden = empty;
+  overviewLayout.sync();
   syncLayout();
   renderMetrics();
   renderExposure();
@@ -697,8 +706,10 @@ function focusPosition(key) {
 }
 
 const cardOrdering = setupCardOrdering($("holdings-body"), moveHolding, renderHoldings);
+const overviewLayout = setupOverviewLayout(loadPreference, savePreference, cardMedia, orderingGrip);
 const refreshHoldings = () => { cardOrdering.cancel(); renderHoldings(); };
 cardMedia.addEventListener("change", refreshHoldings);
+$("toggle-position-filters").addEventListener("click", () => { filtersOpen = !filtersOpen; refreshHoldings(); });
 $("position-search").addEventListener("input", refreshHoldings);
 $("position-search-clear").addEventListener("click", () => {
   const search = $("position-search");
@@ -850,7 +861,7 @@ const workspace = setupWorkspace({
   session: () => session,
   observe: openAccount,
   amount, quantity, percent, tone, leverage,
-  load: loadPreference, store: savePreference, registration,
+  load: loadPreference, store: savePreference, registration, syncOverview: overviewLayout.sync,
   resumeOverview: () => { if (autoRefresh && navigator.onLine && Date.now() - session.requestedAt > pollEvery) refresh(); },
 });
 $("onboarding-wallet").addEventListener("click", () => workspace.openWallets());

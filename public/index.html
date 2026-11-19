@@ -73,6 +73,7 @@
       </div>
       <div class="page-actions">
         <span class="status" id="status" data-state="idle" role="status"><i></i><span id="status-label">未选择钱包</span></span>
+        <button class="btn overview-edit" id="overview-edit" type="button" aria-pressed="false" hidden>编辑布局</button>
         <button class="btn icon-btn" id="refresh" type="button" aria-label="刷新账户数据" title="刷新账户数据"><span class="icon" data-icon="refresh" aria-hidden="true"></span></button>
       </div>
     </section>
@@ -99,8 +100,13 @@
         <button type="button" class="btn" id="onboarding-demo">查看演示</button></div>
     </section>
 
-    <section class="metrics" aria-label="账户概览" data-wallet-detail>
-      <article class="metric total-metric">
+    <div class="overview-layout-actions" id="overview-layout-actions" hidden>
+      <p class="hint">拖动模块把手，或用方向键换位。</p>
+      <button class="btn" type="button" id="overview-reset">恢复默认布局</button>
+    </div>
+    <div class="sr-only" id="overview-order-status" role="status"></div>
+    <div class="overview-layout" id="overview-layout" data-wallet-detail>
+      <article class="metric total-metric" data-overview-card="equity" data-overview-label="账户权益">
         <div class="metric-top">
           <h2><span class="icon metric-icon" data-icon="layers" aria-hidden="true"></span>账户权益</h2>
           <button class="eye" id="privacy" type="button" aria-label="隐藏金额" aria-pressed="false" title="隐藏金额"><span class="icon" id="privacy-icon" data-icon="eye" aria-hidden="true"></span></button>
@@ -108,12 +114,12 @@
         <div class="metric-number" id="equity">—</div>
         <div class="metric-foot" id="equity-note">Hyperliquid 账户估值</div>
       </article>
-      <article class="metric" id="today-pinned" hidden>
+      <article class="metric" id="today-pinned" data-overview-card="today" data-overview-label="今日净盈亏" hidden>
         <div class="metric-top"><h2>今日净盈亏</h2></div>
         <div class="metric-number" id="today-net">—</div>
         <div class="metric-foot" id="today-net-note"></div>
       </article>
-      <article class="metric">
+      <article class="metric" data-overview-card="pnl" data-overview-label="净盈亏">
         <div class="metric-top"><h2><span class="icon metric-icon" data-icon="trend" aria-hidden="true"></span><span id="range-label">今日净盈亏</span></h2>
           <select class="metric-range" id="pnl-summary-range" aria-label="概览盈亏区间">
             <option value="today" selected>今日 UTC+8</option>
@@ -126,31 +132,29 @@
         <div class="metric-number" id="daily">—</div>
         <div class="metric-foot foot-flex"><span id="daily-percent" class="change" hidden></span><span id="daily-note">按官方盈亏曲线计算</span></div>
       </article>
-      <article class="metric">
+      <article class="metric" data-overview-card="floating" data-overview-label="合约未实现盈亏">
         <div class="metric-top"><h2><span class="icon metric-icon" data-icon="bolt" aria-hidden="true"></span>合约未实现盈亏</h2></div>
         <div class="metric-number" id="floating">—</div>
         <div class="metric-foot" id="floating-note">当前合约持仓的浮动盈亏</div>
       </article>
-      <article class="metric realized-metric">
+      <article class="metric realized-metric" data-overview-card="realized" data-overview-label="今日已实现盈亏">
         <div class="metric-top"><h2>今日已实现盈亏</h2></div>
         <div class="metric-number" id="realized-today">—</div>
         <div class="metric-foot" id="realized-note">UTC+8 · 合约成交</div>
       </article>
-    </section>
 
-    <section class="panel risk-cockpit" id="risk-cockpit" aria-labelledby="risk-title" data-wallet-detail>
-      <div class="risk-cockpit-head">
-        <div><h2 id="risk-title">仓位概况</h2><p id="risk-coverage" class="hint"></p></div>
-      </div>
-      <dl class="risk-cockpit-totals">
-        <div><dt>总仓位价值</dt><dd id="risk-notional">—</dd></div>
-        <div><dt>合约保证金占用</dt><dd id="risk-margin">—</dd></div>
-        <div title="多仓和空仓名义价值之和 ÷ 最新账户权益"><dt>总杠杆率</dt><dd id="risk-leverage">—</dd></div>
-      </dl>
-    </section>
+      <section class="panel risk-cockpit" id="risk-cockpit" aria-labelledby="risk-title" data-overview-card="risk" data-overview-label="仓位概况">
+        <div class="risk-cockpit-head">
+          <div><h2 id="risk-title">仓位概况</h2><p id="risk-coverage" class="hint"></p></div>
+        </div>
+        <dl class="risk-cockpit-totals">
+          <div><dt>总仓位价值</dt><dd id="risk-notional">—</dd></div>
+          <div><dt>合约保证金占用</dt><dd id="risk-margin">—</dd></div>
+          <div title="多仓和空仓名义价值之和 ÷ 最新账户权益"><dt>总杠杆率</dt><dd id="risk-leverage">—</dd></div>
+        </dl>
+      </section>
 
-    <div class="overview" data-wallet-detail>
-      <section class="panel trend-panel" aria-labelledby="trend-title">
+      <section class="panel trend-panel" aria-labelledby="trend-title" data-overview-card="trend" data-overview-label="资产走势">
         <div class="panel-head trend-head">
           <h2 id="trend-title">资产走势</h2>
           <div class="segmented periods" id="periods" role="group" aria-label="图表时间范围">
@@ -178,7 +182,7 @@
         </div>
       </section>
 
-      <section class="panel exposure-panel" aria-labelledby="exposure-title">
+      <section class="panel exposure-panel" aria-labelledby="exposure-title" data-overview-card="exposure" data-overview-label="合约仓位分布">
         <div class="panel-head exposure-head">
           <h2 id="exposure-title">合约仓位分布</h2>
           <span class="panel-unit" id="exposure-unit">按名义价值</span>
@@ -197,52 +201,56 @@
           </div>
         </div>
       </section>
-    </div>
 
-    <section class="panel holdings" id="positions-panel" aria-label="持仓与余额" data-wallet-detail>
-      <div class="holdings-head">
-        <div class="holdings-tabs" id="holdings-tabs" role="group" aria-label="资产类型">
-          <button type="button" data-tab="positions" aria-pressed="true">合约持仓 <span id="position-count">—</span></button>
-          <button type="button" data-tab="spot" aria-pressed="false">现货余额 <span id="spot-count">—</span></button>
-        </div>
-        <span class="holding-info" id="holding-info"><i></i><span id="holding-info-text">未选择钱包</span></span>
-      </div>
-      <div class="holdings-tools" id="holdings-tools">
-        <div class="field position-search-field">
-          <label for="position-search">搜索合约</label>
-          <div class="position-search-input">
-            <input type="search" id="position-search" placeholder="BTC、NVDA…" maxlength="40">
-            <button type="button" class="btn" id="position-search-clear" aria-label="清除搜索" hidden><span class="icon" data-icon="close" aria-hidden="true"></span></button>
+      <section class="panel holdings" id="positions-panel" aria-label="持仓与余额" data-overview-card="positions" data-overview-label="持仓与余额">
+        <div class="holdings-head">
+          <div class="holdings-tabs" id="holdings-tabs" role="group" aria-label="资产类型">
+            <button type="button" data-tab="positions" aria-pressed="true">合约持仓 <span id="position-count">—</span></button>
+            <button type="button" data-tab="spot" aria-pressed="false">现货余额 <span id="spot-count">—</span></button>
+          </div>
+          <div class="holding-actions">
+            <span class="holding-info" id="holding-info"><i></i><span id="holding-info-text">未选择钱包</span></span>
+            <button class="btn" id="toggle-position-filters" type="button" aria-controls="holdings-tools" aria-expanded="false" hidden>筛选</button>
           </div>
         </div>
-        <label class="field"><span>方向</span><select id="position-side">
-          <option value="all">全部</option><option value="long">多仓</option><option value="short">空仓</option>
-        </select></label>
-        <label class="field"><span>排序</span><select id="position-sort">
-          <option value="notional">仓位价值</option><option value="pnl">浮盈优先</option>
-          <option value="loss">浮亏优先</option><option value="manual">手动排列</option>
-        </select></label>
-        <label class="field"><span>显示</span><select id="position-layout">
-          <option value="auto">自动</option><option value="cards">卡片</option><option value="table">表格</option>
-        </select></label>
-      </div>
-      <p class="position-order-hint hint" id="position-order-hint" hidden>拖动卡片左侧的把手调整顺序</p>
-      <div class="sr-only" id="position-order-status" role="status"></div>
-      <div class="sr-only" id="position-filter-status" role="status"></div>
-      <div class="holdings-body" id="holdings-body"></div>
-    </section>
+        <div class="holdings-tools" id="holdings-tools" hidden>
+          <div class="field position-search-field">
+            <label for="position-search">搜索合约</label>
+            <div class="position-search-input">
+              <input type="search" id="position-search" placeholder="BTC、NVDA…" maxlength="40">
+              <button type="button" class="btn" id="position-search-clear" aria-label="清除搜索" hidden><span class="icon" data-icon="close" aria-hidden="true"></span></button>
+            </div>
+          </div>
+          <label class="field"><span>方向</span><select id="position-side">
+            <option value="all">全部</option><option value="long">多仓</option><option value="short">空仓</option>
+          </select></label>
+          <label class="field"><span>排序</span><select id="position-sort">
+            <option value="notional">仓位价值</option><option value="pnl">浮盈优先</option>
+            <option value="loss">浮亏优先</option><option value="manual">手动排列</option>
+          </select></label>
+          <label class="field"><span>显示</span><select id="position-layout">
+            <option value="auto">自动</option><option value="cards">卡片</option><option value="table">表格</option>
+          </select></label>
+        </div>
+        <p class="position-order-hint hint" id="position-order-hint" hidden>拖动卡片左侧的把手调整顺序</p>
+        <div class="sr-only" id="position-order-status" role="status"></div>
+        <div class="sr-only" id="position-filter-status" role="status"></div>
+        <div class="holdings-body" id="holdings-body"></div>
+      </section>
 
-    <details class="panel overview-comparison" id="overview-comparison" data-wallet-detail>
-      <summary>仓位对比</summary>
-      <div id="overview-comparison-content"></div>
-    </details>
+      <details class="panel overview-comparison" id="overview-comparison" data-overview-card="comparison" data-overview-label="仓位对比">
+        <summary>仓位对比</summary>
+        <div id="overview-comparison-content"></div>
+      </details>
 
-    <section class="panel account-events" aria-labelledby="account-events-title" data-wallet-detail>
-      <div class="account-events-head"><div><h2 id="account-events-title">最近账户事件</h2><p class="hint" id="account-events-status">等待数据</p></div>
-        <a class="quiet-link" href="/#activity">查看动态</a></div>
-      <ul id="account-event-list" class="account-event-list" hidden></ul>
-      <p id="account-events-empty" class="hint"></p>
-    </section>
+      <section class="panel account-events" aria-labelledby="account-events-title" data-overview-card="events" data-overview-label="最近账户事件">
+        <div class="account-events-head"><div><h2 id="account-events-title">最近账户事件</h2><p class="hint" id="account-events-status">等待数据</p></div>
+          <a class="quiet-link" href="/#activity">查看动态</a></div>
+        <ul id="account-event-list" class="account-event-list" hidden></ul>
+        <p id="account-events-empty" class="hint"></p>
+      </section>
+
+    </div>
 
     <footer class="footer">
       <span><span class="icon" data-icon="lock" aria-hidden="true"></span> 只读看板 <i>·</i> 数据来自 Hyperliquid</span>

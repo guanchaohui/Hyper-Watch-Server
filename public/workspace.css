@@ -64,14 +64,6 @@
 .diagnostics-list li { border-top: 1px solid var(--line); padding: 9px 0; }
 .diagnostics-list small { display: block; color: var(--muted); }
 .quick-mode .heading { margin-top: 20px; }
-.quick-mode .overview { display: contents; }
-.quick-mode .shell:not(.workspace-view) { display: flex; flex-direction: column; }
-.quick-mode .holdings { order: 1; margin-bottom: 12px; }
-.quick-mode .trend-panel { order: 2; margin-bottom: 12px; }
-.quick-mode .exposure-panel { order: 3; }
-.quick-mode .overview-comparison { order: 4; }
-.quick-mode .account-events { order: 5; }
-.quick-mode .footer { order: 6; }
 .quick-mode .chart-container { height: 155px; }
 .quick-mode .ring-area { flex-direction: row; gap: 20px; }
 .quick-mode .ring { width: 110px; height: 110px; flex: none; margin: 5px 0; }
@@ -108,11 +100,6 @@
 .overview-comparison[open] summary { border-bottom: 1px solid var(--quiet-line); }
 #overview-comparison-content { padding: 12px 15px; }
 .total-leverage strong { grid-column: 2 / -1; }
-@media (max-width: 660px) {
-  .overview-comparison { order: 3; }
-  #dashboard .footer { order: 4; }
-  .quick-mode #dashboard .footer { order: 5; }
-}
 
 .notification-preview { margin: 10px 0 16px; padding: 10px 12px; background: var(--panel-raised); border: 1px solid var(--line); border-radius: 10px; }
 .notification-preview h3 { margin: 0 0 8px; font-size: 15px; }
@@ -193,25 +180,10 @@
 }
 .account-event time { color: var(--muted); font-size: 11px; text-align: right; }
 .account-event-amount, .account-event .quiet-link { justify-self: end; font-variant-numeric: tabular-nums; }
-@media (min-width: 1000px) {
-  #dashboard .metrics { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
-}
 @media (max-width: 660px) {
   #dashboard { scroll-padding-block-end: 70px; }
-  #dashboard :is(.heading, .mobile-wallet-strip, .notice, .dashboard-empty, .metrics) { order: 0; }
-  #dashboard .risk-cockpit { order: 1; }
-  #dashboard .holdings { order: 2; }
-  #dashboard .account-events { order: 3; margin-top: 0; }
-  #dashboard .trend-panel { order: 4; }
-  #dashboard .exposure-panel { order: 5; }
-  #dashboard .overview-comparison { order: 6; }
-  #dashboard .footer { order: 7; }
-  .risk-cockpit, .account-events { padding: 10px 11px; margin-bottom: 10px; }
+  .risk-cockpit, .account-events { padding: 10px 11px; }
   .risk-cockpit-totals div { padding-inline: 7px; }
-  #today-pinned[hidden] ~ .realized-metric { grid-column: 1 / -1; min-height: 62px; display: grid; grid-template-columns: 1fr auto; }
-  #today-pinned[hidden] ~ .realized-metric .metric-number { grid-column: 2; grid-row: span 2; margin: 0; align-self: center; }
-  .metrics .metric { min-height: 86px; }
-  .metrics .total-metric { min-height: 92px; }
 }
 
 .ledger-coverage { padding: 0 0 0 18px; color: var(--muted); font-size: .82rem; line-height: 1.65; }
@@ -238,13 +210,38 @@
 }
 .position-search-input .icon { width: 16px; height: 16px; }
 .chart-coverage { margin: 0 0 2px; }
-#dashboard[data-section="positions"] > :is(.metrics, .risk-cockpit, .overview, .account-events, .overview-comparison) { display: none; }
-#dashboard[data-section="positions"] .holdings { order: 1; }
 .mobile-holdings .position-card {
   border: 1px solid var(--quiet-line); border-radius: 10px; background: var(--panel-raised);
   padding: 8px 10px; min-width: 0;
 }
 .position-card .mobile-holding-top { display: flex; align-items: flex-start; gap: 8px; justify-content: space-between; }
+.overview-layout {
+  display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px;
+}
+.overview-widget {
+  grid-column: 1 / -1; min-width: 0; display: flex; flex-direction: column; position: relative;
+}
+.overview-widget[data-kind="metric"] { grid-column: span 3; }
+.overview-widget[data-overview-key="trend"] { grid-column: span 8; }
+.overview-widget[data-overview-key="exposure"] { grid-column: span 4; }
+.overview-widget > [data-overview-card] { flex: 1; min-width: 0; margin: 0; }
+.overview-widget:has(> [data-overview-card][hidden]) { display: none; }
+.quick-mode .overview-widget:is([data-overview-key="trend"], [data-overview-key="exposure"]) { grid-column: 1 / -1; }
+#dashboard[data-section="positions"] .overview-widget:not([data-overview-key="positions"]) { display: none; }
+.overview-layout-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.overview-layout-actions .btn, .page-actions .overview-edit, .holding-actions .btn { white-space: nowrap; }
+.overview-layout[data-editing] > .overview-widget { border: 1px dashed #53617a; border-radius: 12px; padding: 4px; }
+.overview-layout[data-editing] :is([data-position-grip], .position-order-hint) { display: none; }
+.overview-widget > .position-grip { width: 100%; flex: 0 0 auto; height: 34px; margin-bottom: 3px; }
+.overview-widget[data-dragging] { opacity: .55; }
+.overview-widget[data-drop] { outline: 2px solid var(--mint); outline-offset: -2px; }
+.overview-widget[data-drop="before"] { box-shadow: inset 0 3px var(--mint); }
+.overview-widget[data-drop="after"] { box-shadow: inset 0 -3px var(--mint); }
+.holding-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.holding-actions .btn { min-height: 34px; font-size: 12px; }
+@media (max-width: 1050px) {
+  .overview-widget[data-kind="metric"] { grid-column: span 4; }
+}
 .position-order-hint { padding-inline: 13px; margin: 5px 0 0; font-size: 11px; }
 .position-grip {
   display: grid; place-items: center; flex: 0 0 28px; width: 28px; min-height: 34px;
@@ -294,6 +291,15 @@
   .mobile-tabs button[aria-current="page"], .mobile-dock button[aria-pressed="true"] { color: var(--mint); }
   .mobile-tabs button[aria-current="page"] { background: #83f7c60d; border-top-color: var(--mint); }
   .mobile-dock button:disabled { opacity: .55; }
+  .overview-layout { gap: 9px; }
+  .overview-widget:is([data-overview-key="trend"], [data-overview-key="exposure"]) { grid-column: 1 / -1; }
+  .overview-widget[data-kind="metric"] { grid-column: span 6; }
+  .overview-widget[data-overview-key="equity"],
+  .overview-layout:has(#today-pinned[hidden]) .overview-widget[data-overview-key="realized"] { grid-column: 1 / -1; }
+  .overview-widget .metric { min-height: 86px; }
+  .page-actions { flex-wrap: wrap; justify-content: flex-end; }
+  .page-actions .overview-edit, .holding-actions .btn, .overview-layout-actions .btn, .overview-widget > .position-grip { min-height: 44px; }
+  .holdings-head { flex-wrap: wrap; }
   .position-grip { min-height: 44px; flex-basis: 36px; width: 36px; }
   .record-tabs { display: flex; gap: 8px; margin: 12px 0; }
   .record-tabs button, .mine-actions .btn { min-height: 44px; }
