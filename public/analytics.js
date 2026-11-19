@@ -230,13 +230,6 @@ function periodCutoff(range, now) {
   return now - ({ week: 7, month: 30 }[range] ?? 1) * day;
 }
 
-function sampleIndex(points, time) {
-  for (let i = points.length - 1; i >= 0; i--) {
-    if (points[i][0] <= time) return i;
-  }
-  return 0;
-}
-
 // A distant prior sample does not represent the value at midnight.
 export function midnightSample(points, midnight) {
   const next = points.findIndex(([time]) => time >= midnight);
@@ -257,7 +250,7 @@ export function portfolioPeriodPoints(history, range, series, now = Date.now()) 
   if (!end || end[0] < cutoff) return [];
   const midnight = range === "today" ? midnightSample(points, cutoff) : null;
   if (range === "today" && !midnight) return [];
-  const selected = midnight ? [[cutoff, midnight.value], ...points.slice(midnight.next)] : points.slice(sampleIndex(points, cutoff));
+  const selected = midnight ? [[cutoff, midnight.value], ...points.slice(midnight.next)] : points.filter(([at]) => at >= cutoff);
   return series === "pnl"
     ? selected.map(([time, value]) => [time, value - selected[0][1]])
     : selected;
@@ -267,7 +260,7 @@ export function periodPnl(history, range, now = Date.now()) {
   const points = portfolioPeriodPoints(history, range, "pnl", now);
   if (points.length < 2) return null;
   const [start] = points[0];
-  const [end, pnl] = points.at(-1);
+  const pnl = points.at(-1)[1];
   const equities = history[range === "today" ? "day" : range].equity;
   if (range === "today") {
     const midnightPnl = midnightSample(history.day.pnl, start);
@@ -275,8 +268,8 @@ export function periodPnl(history, range, now = Date.now()) {
     return { pnl, start, equity: midnightEquity?.value ?? null,
       ...(midnightPnl.estimated || midnightEquity?.estimated ? { estimated: true } : {}) };
   }
-  const equity = equities[sampleIndex(equities, start)];
-  return { pnl, start, equity: equity && equity[0] <= end ? equity[1] : null };
+  const equity = equities.find(([at]) => at === start)?.[1] ?? null;
+  return { pnl, start, equity };
 }
 
 export const todayGap = 45 * 60_000;

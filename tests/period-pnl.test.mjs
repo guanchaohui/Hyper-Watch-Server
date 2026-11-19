@@ -69,3 +69,21 @@ test("仅对有共同基准的历史盈亏补样，权益可以独立继续展�
   assert.equal(drift.equityStart, midnight);
   assert.deepEqual(todayPortfolio(null, archived, last).points.pnl, []);
 });
+
+test("近 7 天从区间内首个盈亏样本起算，百分比只采用同时刻的权益", () => {
+  const now = Date.parse("2026-11-19T05:00:00Z");
+  const cutoff = now - 7 * day;
+  const start = cutoff + 53 * 60_000;
+  const prior = cutoff - 3 * 3_600_000;
+  const history = {
+    week: { equity: [[prior, 500], [start, 195.97], [now, 2100]], pnl: [[prior, 500], [start, 0], [now, -129.98]] },
+  };
+  const result = periodPnl(history, "week", now);
+  assert.equal(result.start, start);
+  assert.equal(result.pnl, -129.98);
+  assert.equal(result.equity, 195.97);
+  assert.equal((100 * result.pnl / result.equity).toFixed(2), "-66.33");
+  assert.deepEqual(portfolioPeriodPoints(history, "week", "pnl", now), [[start, 0], [now, -129.98]]);
+  history.week.equity.splice(1, 1);
+  assert.equal(periodPnl(history, "week", now).equity, null);
+});

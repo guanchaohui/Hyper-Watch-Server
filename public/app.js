@@ -173,6 +173,9 @@ function renderConnection() {
 const chinaClock = new Intl.DateTimeFormat("zh-CN", {
   timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
 });
+const chinaTime = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+});
 function todayData(s) {
   const now = Date.now();
   const midnight = utc8DayStart(now);
@@ -215,9 +218,12 @@ function renderMetrics() {
   change.hidden = !Number.isFinite(relative);
   change.textContent = percent(relative, true);
   change.className = "change " + tone(relative);
-  $("daily-note").textContent = range === "today"
-    ? todayNote(today)
-    : change.hidden ? "按盈亏历史样本计算" : "相对期初权益";
+  change.title = "区间盈亏金额 ÷ 期初账户权益";
+  const note = $("daily-note");
+  if (range === "today") note.textContent = todayNote(today);
+  else if (summary) note.textContent = (Number.isFinite(first) ? "期初权益 " + amount(first) : "缺少同期权益") +
+    " · " + chinaTime.format(summary.start) + " 起算";
+  else note.textContent = "等待区间盈亏样本";
   $("equity-note").textContent = s.user && last ? "样本时间 " + time.format(last[0]) : "Hyperliquid 账户估值";
   const observed = s.times.get("positions");
   const source = s.scope === "main" ? "默认市场" : "合约持仓";
@@ -251,6 +257,8 @@ function renderRiskCockpit() {
   $("risk-coverage").textContent = source;
   setNumber("risk-notional", notional);
   setNumber("risk-margin", margin);
+  const totalLeverage = s.scope === "all" || s.demo ? leverage(notional, portfolioBrief(s.history).equity) : "—";
+  for (const id of ["risk-leverage", "total-leverage"]) $(id).textContent = totalLeverage;
 }
 
 function renderRecentEvents() {
@@ -299,7 +307,6 @@ function renderExposure() {
   setNumber("exposure-short", short);
   $("long-percent").textContent = percent(split);
   $("short-percent").textContent = percent(split === null ? null : 100 - split);
-  $("total-leverage").textContent = leverage(total, portfolioBrief(session.history).equity);
 }
 
 function renderChart() {
