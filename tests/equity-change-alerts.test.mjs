@@ -240,3 +240,52 @@ test("同一轮仓位风险合并后，每台设备只提交一次", async () =>
     sqlite.close();
   }
 });
+
+test("数据中断以采集完成时间判断，接受请求发出后的权益样本", async t => {
+  const { sqlite, db } = alertStore();
+  t.after(() => sqlite.close());
+  const address = "0x" + "e".repeat(40);
+  const minute = 60_000;
+  let now = Date.parse("2026-11-20T07:00:00Z");
+  let stale = false;
+  t.mock.method(Date, "now", () => now);
+  t.mock.method(globalThis, "fetch", async (_, options) => {
+    const { type } = JSON.parse(options.body);
+    if (type === "perpDexs") return Response.json([null]);
+    if (type === "clearinghouseState") return Response.json({ assetPositions: [] });
+    assert.equal(type, "portfolio");
+    now += 1_800;
+    const sampledAt = now - (stale ? 3 * minute : 300);
+    return Response.json([["day", { accountValueHistory: [[sampledAt, "1000"]] }]]);
+  });
+  sqlite.prepare("INSERT INTO profiles VALUES (?, ?)").run("outage", JSON.stringify({
+    wallets: [{ address, role: "mine" }], rules: { advancedRisk: { dataOutage: 15 } },
+  }));
+  const state = () => JSON.parse(sqlite.prepare("SELECT breached FROM alert_status WHERE user_id=? AND target=?")
+    .get("outage", "advanced-risk:" + address).breached);
+  const scan = async () => assert.equal((await checkAlerts({ DB: db })).failures, 0);
+  const notices = () => sqlite.prepare("SELECT body FROM alerts").all();
+
+  await scan();
+  assert.equal(state().healthyAt, now);
+  now += 30 * minute;
+  await scan();
+  assert.equal(state().healthyAt, now);
+  assert.deepEqual(notices(), []);
+
+  stale = true;
+  now += 16 * minute;
+  await scan();
+  assert.match(notices()[0].body, /数据已中断 16 分钟（阈值 15 分钟）/);
+  const lastHealthy = state().healthyAt;
+  now += minute;
+  await scan();
+  assert.equal(state().healthyAt, lastHealthy);
+  assert.equal(notices().length, 1);
+
+  stale = false;
+  now += minute;
+  await scan();
+  assert.equal(state().healthyAt, now);
+  assert.equal(state().active.outage.breached, false);
+});

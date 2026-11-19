@@ -97,6 +97,8 @@ async function watchRisk(db, user, wallet, rules, now) {
     rules.loss || rules.gap ? hyperliquidInfo({ type: "clearinghouseState", user: wallet.address }, true).then(raw => parsePositions([["", raw]])) : Promise.resolve([]),
     needsFullPositions ? fullPositionSnapshot(wallet.address, true).then(snapshot => snapshot.rows) : Promise.resolve(null),
   ]);
+  // The portfolio response can include a sample generated after the scan started.
+  const observedAt = Date.now();
   const observations = [];
   const statements = [];
   const equityReasons = [];
@@ -207,7 +209,7 @@ async function watchRisk(db, user, wallet, rules, now) {
       riskDetails(db, user, id, wallet.address, equityReasons.some(reason => reason.includes("下跌") || reason.includes("低于") || reason.includes("回落")) ? "warning" : "info"));
   }
   if (rules.advancedRisk) {
-    statements.push(...await planAdvancedRisk(db, user, wallet, rules.advancedRisk, now, perps, equityResult.value, sample));
+    statements.push(...await planAdvancedRisk(db, user, wallet, rules.advancedRisk, observedAt, perps, equityResult.value, sample));
   } else {
     statements.push(db.prepare("DELETE FROM alert_status WHERE user_id = ? AND target = ?").bind(user, "advanced-risk:" + wallet.address));
   }
