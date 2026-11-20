@@ -1,6 +1,8 @@
 import { periodPnl, riskLabels, walletName } from "./analytics.js";
 import { equitySampleFreshness } from "./equity-change-alerts.js";
 
+import { eligiblePosition, riskSnapshot } from "./risk-episodes.js";
+
 const minute = 60_000;
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 const pct = value => value.toFixed(2) + "%";
@@ -12,9 +14,9 @@ export function riskPath(wallet, coin) {
   return "/?" + params;
 }
 
-export function riskDetails(db, user, id, wallet, level, coin) {
+export function riskDetails(db, user, id, wallet, level, coin, extra = {}) {
   return db.prepare("INSERT OR IGNORE INTO alert_details VALUES (?, ?, ?)")
-    .bind(user, id, JSON.stringify({ level, path: riskPath(wallet, coin) }));
+    .bind(user, id, JSON.stringify({ level, path: riskPath(wallet, coin), ...extra }));
 }
 
 export async function privatePush(payload, enabled) {
@@ -25,7 +27,7 @@ export async function privatePush(payload, enabled) {
     tag: "private-" + tag, path: "/#alerts" };
 }
 
-export function evaluateRisk(rule, prior, now, positions, portfolio, sample) {
+export function evaluateRisk(rule, prior, now, positions, portfolio, sample, minimum = null, positionsAt = now) {
   const saved = prior ?? {};
   const state = { watchedAt: saved.watchedAt ?? now, healthyAt: saved.healthyAt ?? null,
     count: saved.count ?? null, countAt: saved.countAt ?? null, active: { ...saved.active } };
@@ -35,18 +37,29 @@ export function evaluateRisk(rule, prior, now, positions, portfolio, sample) {
     if (!threshold) { delete state.active[key]; return; }
     if (!Number.isFinite(value)) return;
     const old = state.active[key];
+    const sampleAt = coin ? positionsAt : now;
+    const sameThreshold = old?.threshold === threshold;
+    const continuous = key !== "count";
     if (value < threshold) {
-      if (old) state.active[key] = { ...old, breached: false };
+      if (!sameThreshold) return;
+      if (!continuous || key === "outage") {
+        state.active[key] = { ...old, breached: false };
+      } else if (old.lastAt !== sampleAt) {
+        const clearSince = value < threshold * .9
+          ? (sampleAt - old.lastAt <= 3 * minute ? old.clearSince ?? sampleAt : sampleAt) : null;
+        state.active[key] = { ...old, lastAt: sampleAt, clearSince, breached:
+          old.breached && !(clearSince !== null && sampleAt - clearSince >= 5 * minute) };
+      }
       return;
     }
     const level = normalLevel === "warning" && value >= threshold * 2 ? "critical" : normalLevel;
-    const sameThreshold = old?.threshold === threshold;
-    const cooledDown = !sameThreshold || (now - old.sentAt >= rule.cooldown * minute &&
-      (!old.breached || now - old.sentAt >= Math.max(60, rule.cooldown) * minute));
+    const elapsed = now - old?.sentAt;
+    const cooledDown = !sameThreshold || (elapsed >= rule.cooldown * minute && (!old.breached ||
+      (!continuous && elapsed >= Math.max(60, rule.cooldown) * minute)));
     if (cooledDown || ranks[level] > ranks[old.level]) {
       notices.push({ key, level, coin, text: label + " " + format(value) + "（阈值 " + format(threshold) + "）" });
-      state.active[key] = { threshold, level, breached: true, sentAt: now };
-    } else state.active[key] = { ...old, breached: true };
+      state.active[key] = { threshold, level, breached: true, sentAt: now, lastAt: sampleAt };
+    } else state.active[key] = { ...old, lastAt: sampleAt, clearSince: null, breached: continuous ? old.breached : true };
   }
 
   if (positions && freshEquity) state.healthyAt = now;
@@ -72,6 +85,7 @@ export function evaluateRisk(rule, prior, now, positions, portfolio, sample) {
       for (const [kind, threshold, value, label, format, level] of checks) {
         const key = kind + ":" + row.coin;
         current.add(key);
+        if (!eligiblePosition(row, minimum)) continue;
         check(key, threshold, value, row.coin + " " + label, format, row.coin, level);
       }
     }
@@ -88,10 +102,10 @@ export function evaluateRisk(rule, prior, now, positions, portfolio, sample) {
   return { state, notices };
 }
 
-export async function planAdvancedRisk(db, user, wallet, rule, now, positions, portfolio, sample) {
+export async function planAdvancedRisk(db, user, wallet, rule, now, positions, portfolio, sample, minimum, positionsAt = now) {
   const target = "advanced-risk:" + wallet.address;
   const prior = await db.prepare("SELECT breached FROM alert_status WHERE user_id = ? AND target = ?").bind(user, target).first();
-  const { state, notices } = evaluateRisk(rule, prior ? JSON.parse(prior.breached) : null, now, positions, portfolio, sample);
+  const { state, notices } = evaluateRisk(rule, prior ? JSON.parse(prior.breached) : null, now, positions, portfolio, sample, minimum, positionsAt);
   const writes = [db.prepare("INSERT INTO alert_status VALUES (?, ?, ?, ?) ON CONFLICT(user_id, target) DO UPDATE SET cursor=excluded.cursor, breached=excluded.breached")
     .bind(user, target, now, JSON.stringify(state))];
   // Group rules for the same position and severity into one notification and record.
@@ -106,9 +120,11 @@ export async function planAdvancedRisk(db, user, wallet, rule, now, positions, p
   for (const [key, { level, coin, lines }] of groups) {
     const id = "risk:" + wallet.address + ":" + now + ":" + key;
     const title = riskLabels[level] + " · " + (coin ?? walletName(wallet));
+    const row = coin && positions?.find(position => position.coin === coin);
+    const details = row ? { snapshots: [riskSnapshot(row, positionsAt)] } : {};
     const body = clock + "（UTC+8）\n" + lines.join("\n");
     writes.push(db.prepare("INSERT OR IGNORE INTO alerts (user_id,event_id,body,created_at,title) VALUES (?,?,?,?,?)")
-      .bind(user, id, body, now, title), riskDetails(db, user, id, wallet.address, level, coin));
+      .bind(user, id, body, now, title), riskDetails(db, user, id, wallet.address, level, coin, details));
   }
   return writes;
 }

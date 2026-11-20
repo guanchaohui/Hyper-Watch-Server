@@ -301,7 +301,7 @@ export function setupWorkspace(ui) {
         '<details class="wallet-alert-options"' + (wallet?.notify ? ' open' : '') + '><summary>成交降噪设置</summary><div class="rule-thresholds">' +
         field("加减仓合并窗口（秒）", '<input id="trade-cooldown" type="number" min="0" max="300" step="1" value="' + tradeCooldown + '">') +
         field("合并后的最低名义金额（USD）", '<input id="min-trade-value" type="number" min="0" max="1000000000000" step="any" value="' + minTradeValue + '">') +
-        '</div><p class="hint">每个钱包独立设置。窗口填 0 逐笔检查，金额填 0 接收所有金额。开仓、平仓和反手即时处理。</p></details>' +
+        '</div><p class="hint">每个钱包独立设置。窗口填 0 逐笔检查，金额填 0 接收所有金额。开仓、平仓和反手即时处理。</p>' + button("trade-noise-preset", "填入降噪设置（60 秒、$100）") + '</details>' +
         (!list.length ? '<p class="hint">添加公开地址即可开始监控。保存为「我的钱包」后可设置权益和杠杆提醒。</p>' : '') +
         '<span id="wallet-message" class="status-inline" role="status"></span>' + syncFragment());
     loadCards();
@@ -601,8 +601,14 @@ export function setupWorkspace(ui) {
         '</div><p class="hint">多仓和空仓的名义价值加总，再除以账户总权益。</p>' +
         '<h2>其他仓位提醒</h2><div class="rule-thresholds">' +
         field("合约净浮亏达到（USD）", '<input type="number" min="0.01" max="1000000000000" step="any" id="rule-loss" value="' + esc(rule.loss ?? "") + '">') +
-        field("距离强平还剩（%）", '<input type="number" min="0.01" max="100" step="any" id="rule-gap" value="' + esc(rule.gap ?? "") + '">') + '</div>' +
-        '<p class="hint">净浮亏统计默认合约市场。强平距离提醒依据 Hyperliquid 提供的强平价。留空关闭对应提醒。</p>' +
+        field("距离强平首次提醒（%）", '<input type="number" min="0.01" max="100" step="any" id="rule-gap" placeholder="5" value="' + esc(rule.gap ?? "") + '">') +
+        field("逐仓最低提醒仓位价值（USD）", '<input type="number" min="0.01" max="1000000000000" step="any" id="rule-isolated-min" value="' + esc(rule.isolatedMinValue ?? "") + '">') +
+        '</div><p class="hint">首次触发立即推送，距离降到 4% 和 3% 时分别升级。距强平回升到首次阈值以上 1 个百分点并持续 5 分钟后，可再次触发。净浮亏统计默认合约市场。逐仓最低价值只筛选单仓风险，留空则提醒所有仓位。</p>' +
+        '<h2>睡眠时段（北京时间）</h2>' + check("enable-quiet", "on", Boolean(rule.quietHours), "启用睡眠时段") +
+        '<div class="rule-thresholds">' +
+        field("开始", '<input id="quiet-start" type="time" required value="' + (rule.quietHours?.start ?? "23:00") + '">') +
+        field("结束", '<input id="quiet-end" type="time" required value="' + (rule.quietHours?.end ?? "08:00") + '">') + '</div>' +
+        '<p class="hint">睡眠时段只推紧急风险。其他提醒保存到记录，结束后不补发，可在提醒记录查看摘要。</p><p class="hint" id="quiet-error" role="status"></p>' +
         '<h2>分级风险预警</h2><div class="rule-thresholds">' +
         Object.entries(riskFields).map(([key, [label, max, integer]]) => field(label, '<input id="risk-' + key +
           '" type="number" min="' + (integer ? 1 : 0.01) + '" max="' + max + '" step="' + (integer ? "1" : "any") +
@@ -616,7 +622,7 @@ export function setupWorkspace(ui) {
       panel('<h2>后台通知</h2><p class="hint" id="cloud-scan-note" aria-live="polite">正在读取云端检查状态…</p>' +
         '<p class="hint" id="push-delivery-note" aria-live="polite"></p><p class="hint" id="push-note">正在检查本机通知能力…</p><div id="push-controls" class="workspace-toolbar" hidden>' +
         button("push-enable", "开启本机通知") + button("push-test", "发测试通知") + button("push-disable", "关闭本机通知") + '</div><span id="push-feedback" class="status-inline" role="status"></span>') +
-      panel('<div class="inline-row"><h2>提醒记录</h2>' + button("reload-inbox", "刷新") + '</div>' +
+      panel('<div class="inline-row"><h2>提醒记录</h2>' + button("reload-inbox", "刷新") + '</div><p id="inbox-quiet-summary" class="hint" hidden></p>' +
         '<div class="workspace-toolbar">' + field("提醒类型", '<select id="inbox-kind">' +
           Object.entries(inboxLabels).map(([key, label]) => choose(key, inboxKind, label)).join("") + '</select>') +
           check("inbox-unread", "on", inboxUnread, "只看未读") + '</div><div id="alert-inbox">' + tip("正在读取…") +
@@ -660,6 +666,23 @@ export function setupWorkspace(ui) {
     }
   }
 
+  function renderRiskSnapshot(snapshot, title = "触发快照") {
+    const mode = snapshot.mode === "isolated" ? "逐仓" : snapshot.mode === "cross" ? "全仓" : "";
+    const direction = snapshot.side === "long" ? "多仓" : "空仓";
+    const values = [
+      ["采样时间", Number.isFinite(snapshot.sampledAt) ? new Intl.DateTimeFormat("zh-CN", {
+        timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+      }).format(snapshot.sampledAt) + "（UTC+8）" : "—"],
+      ["开仓价", money(snapshot.entry)], ["标记价", money(snapshot.mark)],
+      ["交易所预估强平价", money(snapshot.liquidation)], ["名义价值", money(snapshot.notional)],
+      ["浮动盈亏", money(snapshot.pnl, { signed: true })],
+    ];
+    return '<details class="risk-snapshot"><summary>' + esc(title + " · " + snapshot.coin + " · " +
+      [direction, mode, snapshot.leverage && snapshot.leverage + "×"].filter(Boolean).join(" ")) +
+      '</summary><dl>' + values.map(([label, value]) => '<div><dt>' + esc(label) +
+        '</dt><dd>' + esc(value) + '</dd></div>').join("") + '</dl></details>';
+  }
+
   function renderInbox(el) {
     if (!inboxItems.length) {
       el.innerHTML = tip(inboxUnread ? "这类提醒没有未读记录。" :
@@ -680,8 +703,10 @@ export function setupWorkspace(ui) {
         return heading + '<article class="inbox-item"><div class="inbox-meta"><time datetime="' + new Date(item.time).toISOString() + '">' +
           esc(inboxClock.format(item.time)) + '</time><span class="tag">' + esc(kind) + '</span>' +
           (risk ? '<span class="tag risk-' + item.details.level + '">' + esc(risk) + '</span>' : "") +
-          receipt + link + '</div><div class="alert-body">' +
-          (item.title ? '<strong>' + esc(item.title) + '</strong><br>' : '') + esc(item.body) + '</div></article>';
+          (item.details?.quiet ? '<span class="subtle">睡眠静音</span>' : "") + receipt + link + '</div><div class="alert-body">' +
+          (item.title ? '<strong>' + esc(item.title) + '</strong><br>' : '') + esc(item.body) + '</div>' +
+          (item.details?.snapshots ?? []).map(snapshot => renderRiskSnapshot(snapshot)).join("") +
+          Object.values(item.details?.latest ?? {}).map(snapshot => renderRiskSnapshot(snapshot, "最新风险快照")).join("") + '</article>';
       });
       el.innerHTML = rows.join("");
     }
@@ -708,6 +733,12 @@ export function setupWorkspace(ui) {
       inboxExpanded = append;
       inboxNext = response.next;
       inboxItems = append ? [...inboxItems, ...response.items] : response.items;
+      if (!append) {
+        const summary = $("inbox-quiet-summary");
+        const counts = Object.entries(response.quietSummary ?? {}).map(([kind, count]) => (inboxLabels[kind] ?? "其他") + " " + count + " 条");
+        summary.hidden = !counts.length;
+        summary.textContent = counts.length ? "近 24 小时睡眠静音 · " + counts.join(" · ") : "";
+      }
       $("inbox-feedback").textContent = "";
       renderInbox(el);
     } catch {
@@ -1018,6 +1049,11 @@ export function setupWorkspace(ui) {
     switch (selected.id) {
       case "goto-wallets": show("wallets"); break;
       case "save-watch": saveWallet(); break;
+      case "trade-noise-preset":
+        $("trade-cooldown").value = "60";
+        $("min-trade-value").value = "100";
+        $("wallet-message").textContent = "已填入降噪设置，请保存钱包。";
+        break;
       case "cancel-edit": editing = ""; render(); break;
       case "remove-watch": {
         const target = editing;
@@ -1042,9 +1078,15 @@ export function setupWorkspace(ui) {
         const downsideInput = $(downsideInputIds[downsideMode]);
         const volatilityEnabled = viewRoot.querySelector('[name="enable-volatility"]').checked;
         const leverageEnabled = viewRoot.querySelector('[name="enable-leverage"]').checked;
+        const quietEnabled = viewRoot.querySelector('[name="enable-quiet"]').checked;
+        const start = $("quiet-start").value, end = $("quiet-end").value;
+        const quietError = $("quiet-error");
+        quietError.textContent = quietEnabled && start === end ? "开始和结束时间需要不同。" : "";
+        if (quietError.textContent) break;
         const riskKeys = [...Object.keys(riskFields), "cooldown"];
         const riskInputs = riskKeys.map(key => $("risk-" + key));
-        const inputs = [$("rule-loss"), $("rule-gap"), $("equity-change-up"), downsideInput, ...riskInputs];
+        const inputs = [$("rule-loss"), $("rule-gap"), $("rule-isolated-min"), $("equity-change-up"), downsideInput, ...riskInputs];
+        if (quietEnabled) inputs.push($("quiet-start"), $("quiet-end"));
         if (volatilityEnabled) inputs.push($("volatility-minutes"), $("volatility-threshold"));
         if (leverageEnabled) inputs.push($("leverage-threshold"));
         if (!inputs.filter(Boolean).every(input => input.reportValidity())) break;
@@ -1061,6 +1103,7 @@ export function setupWorkspace(ui) {
           leverageAlert: leverageEnabled ? $("leverage-threshold").value : null,
           equityMode, equity: downsideMode === "rolling" ? null : downsideInput?.value, equityTrackingId: profile.rules.equityTrackingId,
           loss: $("rule-loss").value, gap: $("rule-gap").value,
+          isolatedMinValue: $("rule-isolated-min").value, quietHours: quietEnabled ? { start, end } : null,
           advancedRisk: Object.fromEntries(riskKeys.map((key, index) => [key, riskInputs[index].value])),
           pushPrivate: viewRoot.querySelector('[name="push-private"]').checked,
         } });

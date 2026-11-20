@@ -1,4 +1,5 @@
-import { cashMovements, midnightSample, portfolioPeriodPoints, utc8DayStart } from "./analytics.js";
+import { cashMovements, todayPortfolio, utc8DayStart } from "./analytics.js";
+import { readEquitySnapshots } from "./ledger-sync.js";
 import { hyperliquidInfo } from "./hyperliquid.js";
 import { formatEquityNotification, formatEquityReason } from "./notification-format.js";
 
@@ -55,10 +56,12 @@ export async function planEquityChange(db, user, address, rule, now, current) {
   };
 }
 
-export async function accountEquityNotice(address, history, now, current, reasons, swing) {
-  const points = portfolioPeriodPoints(history, "today", "equity", now);
+export async function accountEquityNotice(address, history, now, current, reasons, swing, db) {
+  const snapshots = db ? await readEquitySnapshots(db, address, now).catch(() => null) : null;
+  const today = todayPortfolio(history, snapshots, now);
+  const points = today.points.equity;
   const startTime = utc8DayStart(now);
-  const dayEquity = points.length >= 2 ? points[0][1] : null;
+  const dayEquity = points.length >= 2 && today.equityStart === startTime ? points[0][1] : null;
   let deposited = 0;
   let withdrawn = 0;
   try {
@@ -70,7 +73,7 @@ export async function accountEquityNotice(address, history, now, current, reason
     // The equity alert still goes out when the cash-flow lookup is unavailable.
   }
   return formatEquityNotification({
-    current, dayEquity, approximate: midnightSample(history?.day?.equity ?? [], startTime)?.estimated, reasons, swing, deposited, withdrawn,
+    current, dayEquity, approximate: today.equityEstimated, reasons, swing, deposited, withdrawn,
   });
 }
 

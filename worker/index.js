@@ -92,6 +92,17 @@ async function syncProfile(request, db, user) {
     return json({ error: "无效的设置版本" }, 400);
   }
   const profile = cleanProfile(data.profile);
+  const incoming = data.profile.rules ?? {};
+  const hasQuiet = Object.hasOwn(incoming, "quietHours");
+  const hasMinimum = Object.hasOwn(incoming, "isolatedMinValue");
+  if (profile.rules.quietHours || !hasQuiet || !hasMinimum) {
+    const row = await db.prepare("SELECT settings FROM profiles WHERE user_id = ? AND revision = ?").bind(user, data.revision).first();
+    const previous = row ? cleanProfile(JSON.parse(row.settings)).rules : null;
+    if (!hasMinimum && previous) profile.rules.isolatedMinValue = previous.isolatedMinValue;
+    if (!hasQuiet && previous) profile.rules.quietHours = previous.quietHours;
+    const quiet = profile.rules.quietHours, saved = previous?.quietHours;
+    if (quiet) quiet.since = saved?.start === quiet.start && saved?.end === quiet.end ? saved.since ?? Date.now() : Date.now();
+  }
   const settings = JSON.stringify(profile);
   const revision = data.revision + 1;
   const write = data.revision === 0

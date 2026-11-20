@@ -289,3 +289,132 @@ test("数据中断以采集完成时间判断，接受请求发出后的权益�
   assert.equal(state().healthyAt, now);
   assert.equal(state().active.outage.breached, false);
 });
+
+test("强平风险按 5/4/3 分档，稳定恢复后重触发，并保留触发快照", async t => {
+  const { sqlite, db } = alertStore();
+  t.after(() => sqlite.close());
+  const address = "0x" + "9".repeat(40);
+  const minute = 60_000;
+  let now = Date.parse("2026-11-21T07:00:00Z");
+  let distance = 8;
+  let amount = 200;
+  let mode = "isolated";
+  let missing = false;
+  t.mock.method(Date, "now", () => now);
+  t.mock.method(globalThis, "fetch", async (_, options) => {
+    const { type } = JSON.parse(options.body);
+    if (type === "perpDexs") return Response.json([null]);
+    assert.equal(type, "clearinghouseState");
+    if (missing) return new Response(null, { status: 503 });
+    return Response.json({ assetPositions: [{ position: {
+      coin: "TEST", szi: String(amount / 100), positionValue: String(amount), entryPx: "101",
+      unrealizedPnl: "-2", liquidationPx: String(100 - distance), leverage: { type: mode, value: 10 },
+    } }] });
+  });
+  const user = "risk-episodes";
+  const save = sqlite.prepare("INSERT INTO profiles VALUES (?,?)");
+  save.run(user, JSON.stringify({ wallets: [{ address, role: "mine" }], rules: { gap: 5, isolatedMinValue: 100 } }));
+  const scan = async value => { now += minute; distance = value; return checkAlerts({ DB: db }, user); };
+  const inbox = () => sqlite.prepare("SELECT body,details FROM alerts JOIN alert_details USING(user_id,event_id) ORDER BY created_at")
+    .all().map(item => ({ body: item.body, ...JSON.parse(item.details) }));
+
+  await scan(4.93);
+  for (const gap of [5.02, 4.87, 5.19, 4.7]) await scan(gap);
+  assert.equal(inbox().length, 1);
+  assert.equal(inbox()[0].level, "warning");
+  assert.equal(inbox()[0].snapshots[0].distance.toFixed(2), "4.93");
+  assert.equal(Object.values(inbox()[0].latest)[0].distance.toFixed(2), "4.70");
+  await scan(4);
+  await scan(4.1);
+  await scan(3.98);
+  await scan(2.9);
+  assert.deepEqual(inbox().map(item => item.level), ["warning", "critical", "critical"]);
+  assert.equal(inbox()[1].snapshots[0].liquidation, 96);
+  assert.equal(inbox()[2].snapshots[0].entry, 101);
+  for (let i = 0; i < 4; i++) await scan(6.1);
+  missing = true;
+  now += 5 * minute;
+  assert.equal((await scan(6.2)).failures, 1);
+  missing = false;
+  await scan(4.7);
+  assert.equal(inbox().length, 3);
+  for (let i = 0; i < 6; i++) await scan(6.1);
+  amount = 90;
+  await scan(4.5);
+  assert.equal(inbox().length, 3);
+  mode = "cross";
+  await scan(4.5);
+  assert.equal(inbox().length, 4);
+  assert.equal(inbox()[3].snapshots[0].mode, "cross");
+});
+
+test("睡眠时段跨午夜，只投递紧急风险，普通提醒留档且早上不补发", async t => {
+  const { sqlite, db } = alertStore();
+  t.after(() => sqlite.close());
+  sqlite.exec(readFileSync(new URL("../drizzle/0001_alert_receipts.sql", import.meta.url), "utf8"));
+  const endpoint = "https://fcm.googleapis.com/fcm/send/quiet-test";
+  let now = Date.parse("2026-11-21T16:30:00Z");
+  t.mock.method(Date, "now", () => now);
+  const user = "quiet";
+  const deviceKey = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const vapid = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const subscription = {
+    endpoint, since: now - 7_200_000, keys: {
+      p256dh: Buffer.from(await crypto.subtle.exportKey("raw", deviceKey.publicKey)).toString("base64url"),
+      auth: Buffer.alloc(16, 1).toString("base64url"),
+    },
+  };
+  const env = { DB: db, PUBLIC_ORIGIN: "https://test.example",
+    VAPID_PRIVATE: JSON.stringify(await crypto.subtle.exportKey("jwk", vapid.privateKey)),
+    VAPID_PUBLIC: Buffer.from(await crypto.subtle.exportKey("raw", vapid.publicKey)).toString("base64url"),
+  };
+  let sent = 0;
+  t.mock.method(globalThis, "fetch", async url => {
+    assert.equal(String(url), endpoint);
+    sent++;
+    return new Response(null, { status: 201 });
+  });
+  sqlite.prepare("INSERT INTO profiles VALUES (?,?)").run(user, JSON.stringify({ rules: { quietHours: {
+    start: "23:00", end: "08:00", since: subscription.since,
+  } } }));
+  sqlite.prepare("INSERT INTO push_devices VALUES (?,?,?)").run(user, endpoint, JSON.stringify(subscription));
+  const receive = sqlite.prepare("INSERT INTO alerts (user_id,event_id,title,body,created_at) VALUES (?,?,?,?,?)");
+  receive.run(user, "fill:one", "开仓", "成交", now - 60_000);
+  receive.run(user, "risk:critical", "紧急", "风险升级", now - 30_000);
+  receive.run("another-user", "fill:private", "开仓", "成交", now - 60_000);
+  sqlite.prepare("INSERT INTO alert_details VALUES (?,?,?)").run(user, "risk:critical", JSON.stringify({ level: "critical" }));
+
+  assert.equal(await queueAlertDelivery(env, user), 1);
+  assert.equal(sent, 1);
+  const { readInbox } = await import("../dist/server/inbox.js");
+  const inbox = await readInbox(db, user, { kind: "all", unread: false });
+  assert.deepEqual(inbox.quietSummary, { fill: 1 });
+  assert.equal(inbox.items.find(item => item.id === "fill:one").details.quiet, true);
+  assert.equal(inbox.items.find(item => item.id === "risk:critical").details.quiet, undefined);
+  const next = Date.parse("2026-11-22T00:00:00Z");
+  receive.run(user, "equity:while-offline", "权益波动", "普通提醒", next - 60_000);
+  now = next;
+  assert.equal(await queueAlertDelivery(env, user), 0);
+  assert.equal(sent, 1);
+  receive.run(user, "fill:day", "开仓", "成交", now + 30_000);
+  now += 60_000;
+  assert.equal(await queueAlertDelivery(env, user), 1);
+  assert.equal(sent, 2);
+});
+
+test("权益推送复用零点附近存档，历史样本不足时保留提示", async t => {
+  const { sqlite, db } = alertStore();
+  t.after(() => sqlite.close());
+  sqlite.exec(readFileSync(new URL("../drizzle/0003_wallet_history.sql", import.meta.url), "utf8"));
+  const { accountEquityNotice } = await import("../dist/server/equity-change-alerts.js");
+  const midnight = Date.parse("2026-11-22T16:00:00Z");
+  const now = midnight + 4 * 60 * 60_000;
+  const address = "0x" + "8".repeat(40);
+  t.mock.method(Date, "now", () => now);
+  t.mock.method(globalThis, "fetch", async () => Response.json([]));
+  const history = { day: { equity: [[now, 1100]], pnl: [] } };
+  const preview = () => accountEquityNotice(address, history, now, 1100, [], null, db);
+  assert.match((await preview()).body, /今日样本不足/);
+  sqlite.prepare("INSERT INTO wallet_equity_history VALUES (?,?,?,?)").run(address, midnight, "1000", null);
+  assert.match((await preview()).body, /UTC\+8 零点起 \+\$100\.00/);
+});

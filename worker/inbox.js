@@ -1,3 +1,5 @@
+import { recentQuietSummary } from "./quiet-hours.js";
+
 const pageSize = 20;
 export const inboxKinds = new Set(["all", "fill", "equity", "leverage", "risk"]);
 
@@ -21,7 +23,7 @@ export async function readInbox(db, user, { kind, unread, before }) {
   ).bind(...bindings, pageSize + 1).all();
   const items = results.slice(0, pageSize).map(row => ({ ...row, details: row.details ? JSON.parse(row.details) : null }));
   const last = items.at(-1);
-  return { items, next: results.length > pageSize ? { time: last.time, id: last.id } : null };
+  return { items, ...(!before && { quietSummary: await recentQuietSummary(db, user) }), next: results.length > pageSize ? { time: last.time, id: last.id } : null };
 }
 
 export async function markInboxRead(db, user, id, now = Date.now()) {

@@ -88,6 +88,13 @@ function cleanAdvancedRisk(value) {
   return { ...rules, cooldown: Number.isInteger(cooldown) && cooldown >= 1 && cooldown <= 1440 ? cooldown : 15 };
 }
 
+function cleanQuietHours(value) {
+  const time = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+  if (typeof value?.start !== "string" || typeof value.end !== "string" ||
+      !time.test(value.start) || !time.test(value.end) || value.start === value.end) return null;
+  return { start: value.start, end: value.end, since: Number.isSafeInteger(value.since) && value.since > 0 ? value.since : null };
+}
+
 export function cleanProfile(value) {
   const wallets = [];
   const seen = new Set();
@@ -131,6 +138,8 @@ export function cleanProfile(value) {
       leverageAlert: cleanLeverageAlert(rules.leverageAlert),
       advancedRisk: cleanAdvancedRisk(rules.advancedRisk),
       pushPrivate: rules.pushPrivate === true,
+      quietHours: cleanQuietHours(rules.quietHours),
+      isolatedMinValue: positive("isolatedMinValue"),
       notificationFields: cleanNotificationFields(rules.notificationFields),
       notificationPositionUnit: cleanNotificationPositionUnit(rules.notificationPositionUnit),
       equityMode,
